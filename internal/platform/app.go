@@ -1,0 +1,534 @@
+package platform
+
+import (
+	"context"
+	"crypto/pbkdf2"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"embed"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"io/fs"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+//go:embed schema.sql web/*
+var assets embed.FS
+
+type rateWindow struct {
+	start time.Time
+	count int
+}
+type rateLimiter struct {
+	mu      sync.Mutex
+	windows map[string]rateWindow
+}
+
+func (l *rateLimiter) allow(key string, limit int) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	if l.windows == nil {
+		l.windows = map[string]rateWindow{}
+	}
+	if len(l.windows) > 10000 {
+		for k, v := range l.windows {
+			if now.Sub(v.start) > time.Minute {
+				delete(l.windows, k)
+			}
+		}
+		if len(l.windows) > 10000 {
+			return false
+		}
+	}
+	w := l.windows[key]
+	if now.Sub(w.start) > time.Minute {
+		w = rateWindow{start: now}
+	}
+	w.count++
+	l.windows[key] = w
+	return w.count <= limit
+}
+
+type Price struct {
+	Input    string `json:"input_per_million"`
+	Output   string `json:"output_per_million"`
+	Currency string `json:"currency"`
+	Version  string `json:"version"`
+}
+type App struct {
+	db           *pgxpool.Pool
+	origin       string
+	secure       bool
+	limiter      rateLimiter
+	prices       map[string]Price
+	accepted     atomic.Int64
+	duplicates   atomic.Int64
+	failures     atomic.Int64
+	requests     atomic.Int64
+	requestNanos atomic.Int64
+	keyLimit     int
+	projectLimit int
+	orgLimit     int
+}
+type User struct {
+	ID             string `json:"id"`
+	OrganizationID string `json:"organization_id"`
+	DisplayName    string `json:"display_name"`
+}
+type Project struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	RepositoryURL string `json:"repository_url"`
+	Privacy       string `json:"privacy"`
+	TrackDiffs    bool   `json:"track_diffs"`
+}
+
+func New(ctx context.Context, dsn, origin string) (*App, error) {
+	if dsn == "" {
+		return nil, errors.New("DATABASE_URL is required")
+	}
+	if origin == "" {
+		origin = "http://localhost:8080"
+	}
+	origin = strings.TrimRight(origin, "/")
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, errors.New("APP_ORIGIN must be an absolute HTTP(S) origin")
+	}
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, errors.New("invalid database configuration")
+	}
+	config.MaxConns = 10
+	db, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		return nil, errors.New("could not create database pool")
+	}
+	if err = migrate(ctx, db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	a := &App{db: db, origin: origin, secure: u.Scheme == "https", keyLimit: envInt("KEY_REQUESTS_PER_MINUTE", 600), projectLimit: envInt("PROJECT_REQUESTS_PER_MINUTE", 3000), orgLimit: envInt("ORG_REQUESTS_PER_MINUTE", 10000)}
+	if raw := os.Getenv("PRICING_JSON"); raw != "" {
+		if err = json.Unmarshal([]byte(raw), &a.prices); err != nil {
+			db.Close()
+			return nil, errors.New("invalid PRICING_JSON")
+		}
+		for _, p := range a.prices {
+			if !decimalAmount.MatchString(p.Input) || !decimalAmount.MatchString(p.Output) || !currencyCode.MatchString(p.Currency) || p.Version == "" {
+				db.Close()
+				return nil, errors.New("invalid pricing entry")
+			}
+		}
+	}
+	return a, nil
+}
+func envInt(key string, fallback int) int {
+	v, err := strconv.Atoi(os.Getenv(key))
+	if err != nil || v < 1 {
+		return fallback
+	}
+	return v
+}
+func (a *App) Close() { a.db.Close() }
+func token(prefix string) string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return prefix + hex.EncodeToString(b)
+}
+func digest(s string) string { d := sha256.Sum256([]byte(s)); return hex.EncodeToString(d[:]) }
+func passwordHash(password, salt string) string {
+	b, err := pbkdf2.Key(sha256.New, password, []byte(salt), 600000, 32)
+	if err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b)
+}
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+func fail(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": msg}})
+}
+func decode(w http.ResponseWriter, r *http.Request, v any) bool {
+	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		fail(w, 415, "CONTENT_TYPE", "Use application/json")
+		return false
+	}
+	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err := d.Decode(v); err != nil {
+		fail(w, 400, "INVALID_JSON", "Invalid JSON or request exceeds 1 MiB")
+		return false
+	}
+	if err := d.Decode(new(any)); err != io.EOF {
+		fail(w, 400, "INVALID_JSON", "Expected exactly one JSON value")
+		return false
+	}
+	return true
+}
+func (a *App) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if a.db.Ping(ctx) != nil {
+			fail(w, 503, "NOT_READY", "Database unavailable")
+			return
+		}
+		writeJSON(w, 200, map[string]string{"status": "ok"})
+	})
+	mux.HandleFunc("POST /api/v1/auth/register", a.register)
+	mux.HandleFunc("POST /api/v1/auth/login", a.login)
+	mux.HandleFunc("POST /api/v1/auth/logout", a.logout)
+	mux.HandleFunc("GET /api/v1/me", func(w http.ResponseWriter, r *http.Request) {
+		u, ok := a.user(w, r)
+		if ok {
+			writeJSON(w, 200, u)
+		}
+	})
+	mux.HandleFunc("GET /api/v1/projects", a.projects)
+	mux.HandleFunc("POST /api/v1/projects", a.createProject)
+	mux.HandleFunc("PATCH /api/v1/projects/{project}", a.updateProject)
+	mux.HandleFunc("GET /api/v1/projects/{project}/keys", a.keys)
+	mux.HandleFunc("POST /api/v1/projects/{project}/keys", a.createKey)
+	mux.HandleFunc("DELETE /api/v1/projects/{project}/keys/{key}", a.revokeKey)
+	mux.HandleFunc("POST /api/v1/events", a.ingest)
+	mux.HandleFunc("GET /api/v1/projects/{project}/events", a.events)
+	mux.HandleFunc("GET /api/v1/projects/{project}/analytics", a.analytics)
+	mux.HandleFunc("GET /api/v1/metrics", a.metrics)
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, 404, "NOT_FOUND", "Unknown API endpoint") })
+	web, _ := fs.Sub(assets, "web")
+	mux.Handle("/", http.FileServer(http.FS(web)))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		a.requests.Add(1)
+		defer func() { a.requestNanos.Add(time.Since(start).Nanoseconds()) }()
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "same-origin")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'")
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		if r.Method != "GET" && r.Method != "HEAD" && r.URL.Path != "/api/v1/events" {
+			if origin := r.Header.Get("Origin"); origin != "" && origin != a.origin {
+				fail(w, 403, "ORIGIN_DENIED", "Request origin is not allowed")
+				return
+			}
+			if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+				fail(w, 403, "ORIGIN_DENIED", "Cross-site request denied")
+				return
+			}
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		mux.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+func (a *App) user(w http.ResponseWriter, r *http.Request) (User, bool) {
+	var u User
+	c, err := r.Cookie("rubberai_session")
+	if err == nil {
+		err = a.db.QueryRow(r.Context(), `SELECT u.id,u.organization_id,u.display_name FROM logins l JOIN users u ON u.id=l.user_id WHERE l.token_hash=$1 AND l.expires_at>now()`, digest(c.Value)).Scan(&u.ID, &u.OrganizationID, &u.DisplayName)
+	}
+	if err != nil {
+		fail(w, 401, "UNAUTHENTICATED", "Sign in to continue")
+		return u, false
+	}
+	return u, true
+}
+func (a *App) project(w http.ResponseWriter, r *http.Request) (Project, bool) {
+	var p Project
+	u, ok := a.user(w, r)
+	if !ok {
+		return p, false
+	}
+	err := a.db.QueryRow(r.Context(), `SELECT id,name,description,repository_url,privacy,track_diffs FROM projects WHERE id=$1 AND organization_id=$2`, r.PathValue("project"), u.OrganizationID).Scan(&p.ID, &p.Name, &p.Description, &p.RepositoryURL, &p.Privacy, &p.TrackDiffs)
+	if err != nil {
+		fail(w, 404, "PROJECT_NOT_FOUND", "Project not found")
+		return p, false
+	}
+	return p, true
+}
+func (a *App) authLimit(w http.ResponseWriter, r *http.Request) bool {
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if !a.limiter.allow("auth:"+host, 20) {
+		w.Header().Set("Retry-After", "60")
+		fail(w, 429, "RATE_LIMITED", "Try again in one minute")
+		return false
+	}
+	return true
+}
+func (a *App) session(w http.ResponseWriter, r *http.Request, u User) {
+	key := token("")
+	_, err := a.db.Exec(r.Context(), `INSERT INTO logins(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '24 hours')`, digest(key), u.ID)
+	if err != nil {
+		fail(w, 500, "STORAGE_ERROR", "Could not create session")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: "rubberai_session", Value: key, Path: "/", HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteStrictMode, MaxAge: 86400})
+	writeJSON(w, 200, u)
+}
+func (a *App) register(w http.ResponseWriter, r *http.Request) {
+	if !a.authLimit(w, r) {
+		return
+	}
+	var b struct {
+		Username     string `json:"username"`
+		Password     string `json:"password"`
+		DisplayName  string `json:"display_name"`
+		Organization string `json:"organization"`
+	}
+	if !decode(w, r, &b) {
+		return
+	}
+	b.Username = strings.ToLower(strings.TrimSpace(b.Username))
+	if !identifier.MatchString(b.Username) || len(b.Password) < 12 || len(b.Password) > 256 || len(strings.TrimSpace(b.DisplayName)) == 0 || len(b.DisplayName) > 120 || len(strings.TrimSpace(b.Organization)) == 0 || len(b.Organization) > 120 {
+		fail(w, 400, "INVALID_REGISTRATION", "Provide username, display name, organization and a 12–256 character password")
+		return
+	}
+	salt := token("")
+	hash := salt + ":" + passwordHash(b.Password, salt)
+	u := User{token("usr_"), token("org_"), b.DisplayName}
+	tx, err := a.db.Begin(r.Context())
+	if err != nil {
+		fail(w, 503, "STORAGE_ERROR", "Database unavailable")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	_, err = tx.Exec(r.Context(), `INSERT INTO organizations(id,name) VALUES($1,$2)`, u.OrganizationID, b.Organization)
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `INSERT INTO users(id,organization_id,username,display_name,password_hash) VALUES($1,$2,$3,$4,$5)`, u.ID, u.OrganizationID, b.Username, b.DisplayName, hash)
+	}
+	if err != nil {
+		fail(w, 409, "REGISTRATION_FAILED", "Could not register; username may already exist")
+		return
+	}
+	if tx.Commit(r.Context()) != nil {
+		fail(w, 500, "STORAGE_ERROR", "Could not register")
+		return
+	}
+	a.session(w, r, u)
+}
+func (a *App) login(w http.ResponseWriter, r *http.Request) {
+	if !a.authLimit(w, r) {
+		return
+	}
+	var b struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if !decode(w, r, &b) {
+		return
+	}
+	if len(b.Password) > 256 {
+		fail(w, 400, "INVALID_LOGIN", "Invalid credentials")
+		return
+	}
+	var u User
+	var stored string
+	err := a.db.QueryRow(r.Context(), `SELECT id,organization_id,display_name,password_hash FROM users WHERE username=$1`, strings.ToLower(strings.TrimSpace(b.Username))).Scan(&u.ID, &u.OrganizationID, &u.DisplayName, &stored)
+	parts := strings.Split(stored, ":")
+	if len(parts) != 2 {
+		parts = []string{"dummy", "dummy"}
+	}
+	calculated := passwordHash(b.Password, parts[0])
+	if err != nil || subtle.ConstantTimeCompare([]byte(calculated), []byte(parts[1])) != 1 {
+		fail(w, 401, "INVALID_LOGIN", "Invalid credentials")
+		return
+	}
+	a.session(w, r, u)
+}
+func (a *App) logout(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie("rubberai_session"); err == nil {
+		if _, err = a.db.Exec(r.Context(), `DELETE FROM logins WHERE token_hash=$1`, digest(c.Value)); err != nil {
+			fail(w, 503, "STORAGE_ERROR", "Could not sign out")
+			return
+		}
+	}
+	http.SetCookie(w, &http.Cookie{Name: "rubberai_session", Value: "", Path: "/", HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+func (a *App) projects(w http.ResponseWriter, r *http.Request) {
+	u, ok := a.user(w, r)
+	if !ok {
+		return
+	}
+	rows, err := a.db.Query(r.Context(), `SELECT id,name,description,repository_url,privacy,track_diffs FROM projects WHERE organization_id=$1 ORDER BY created_at DESC`, u.OrganizationID)
+	if err != nil {
+		fail(w, 500, "STORAGE_ERROR", "Could not list projects")
+		return
+	}
+	defer rows.Close()
+	out := []Project{}
+	for rows.Next() {
+		var p Project
+		if rows.Scan(&p.ID, &p.Name, &p.Description, &p.RepositoryURL, &p.Privacy, &p.TrackDiffs) != nil {
+			fail(w, 500, "STORAGE_ERROR", "Could not read projects")
+			return
+		}
+		out = append(out, p)
+	}
+	if rows.Err() != nil {
+		fail(w, 500, "STORAGE_ERROR", "Could not list projects")
+		return
+	}
+	writeJSON(w, 200, out)
+}
+func validProject(p Project) bool {
+	return len(strings.TrimSpace(p.Name)) > 0 && len(p.Name) <= 120 && len(p.Description) <= 2000 && len(p.RepositoryURL) <= 2000 && (p.Privacy == "METADATA_ONLY" || p.Privacy == "REDACTED" || p.Privacy == "FULL")
+}
+func (a *App) createProject(w http.ResponseWriter, r *http.Request) {
+	u, ok := a.user(w, r)
+	if !ok {
+		return
+	}
+	p := Project{Privacy: "METADATA_ONLY"}
+	if !decode(w, r, &p) {
+		return
+	}
+	if !validProject(p) {
+		fail(w, 400, "INVALID_PROJECT", "Provide a name and valid privacy mode")
+		return
+	}
+	p.ID = token("prj_")
+	_, err := a.db.Exec(r.Context(), `INSERT INTO projects(id,organization_id,name,description,repository_url,privacy,track_diffs) VALUES($1,$2,$3,$4,$5,$6,$7)`, p.ID, u.OrganizationID, p.Name, p.Description, p.RepositoryURL, p.Privacy, p.TrackDiffs)
+	if err != nil {
+		fail(w, 500, "STORAGE_ERROR", "Could not create project")
+		return
+	}
+	writeJSON(w, 201, p)
+}
+func (a *App) updateProject(w http.ResponseWriter, r *http.Request) {
+	p, ok := a.project(w, r)
+	if !ok {
+		return
+	}
+	id := p.ID
+	if !decode(w, r, &p) {
+		return
+	}
+	p.ID = id
+	if !validProject(p) {
+		fail(w, 400, "INVALID_PROJECT", "Invalid project settings")
+		return
+	}
+	_, err := a.db.Exec(r.Context(), `UPDATE projects SET name=$2,description=$3,repository_url=$4,privacy=$5,track_diffs=$6 WHERE id=$1`, p.ID, p.Name, p.Description, p.RepositoryURL, p.Privacy, p.TrackDiffs)
+	if err != nil {
+		fail(w, 500, "STORAGE_ERROR", "Could not update project")
+		return
+	}
+	writeJSON(w, 200, p)
+}
+func (a *App) keys(w http.ResponseWriter, r *http.Request) {
+	p, ok := a.project(w, r)
+	if !ok {
+		return
+	}
+	rows, err := a.db.Query(r.Context(), `SELECT id,name,created_at,revoked_at FROM api_keys WHERE project_id=$1 ORDER BY created_at DESC`, p.ID)
+	if err != nil {
+		fail(w, 500, "STORAGE_ERROR", "Could not list keys")
+		return
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var id, name string
+		var created time.Time
+		var revoked *time.Time
+		if rows.Scan(&id, &name, &created, &revoked) != nil {
+			fail(w, 500, "STORAGE_ERROR", "Could not read keys")
+			return
+		}
+		out = append(out, map[string]any{"id": id, "name": name, "created_at": created, "revoked_at": revoked})
+	}
+	if rows.Err() != nil {
+		fail(w, 500, "STORAGE_ERROR", "Could not list keys")
+		return
+	}
+	writeJSON(w, 200, out)
+}
+func (a *App) createKey(w http.ResponseWriter, r *http.Request) {
+	p, ok := a.project(w, r)
+	if !ok {
+		return
+	}
+	var b struct {
+		Name string `json:"name"`
+	}
+	if !decode(w, r, &b) {
+		return
+	}
+	if len(b.Name) == 0 || len(b.Name) > 120 {
+		fail(w, 400, "INVALID_KEY", "Provide a key name")
+		return
+	}
+	raw := token("rai_")
+	id := token("key_")
+	_, err := a.db.Exec(r.Context(), `INSERT INTO api_keys(id,project_id,token_hash,name) VALUES($1,$2,$3,$4)`, id, p.ID, digest(raw), b.Name)
+	if err != nil {
+		fail(w, 500, "STORAGE_ERROR", "Could not create key")
+		return
+	}
+	writeJSON(w, 201, map[string]string{"id": id, "api_key": raw, "scope": "events:write", "project_id": p.ID})
+}
+func (a *App) revokeKey(w http.ResponseWriter, r *http.Request) {
+	p, ok := a.project(w, r)
+	if !ok {
+		return
+	}
+	tag, err := a.db.Exec(r.Context(), `UPDATE api_keys SET revoked_at=now() WHERE id=$1 AND project_id=$2`, r.PathValue("key"), p.ID)
+	if err != nil {
+		fail(w, 500, "STORAGE_ERROR", "Could not revoke key")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		fail(w, 404, "KEY_NOT_FOUND", "Key not found")
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func migrate(ctx context.Context, db *pgxpool.Pool) error {
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return errors.New("database unavailable")
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(8272331)"); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, "CREATE TABLE IF NOT EXISTS schema_migrations(version integer PRIMARY KEY)"); err != nil {
+		return err
+	}
+	var applied bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=1)").Scan(&applied); err != nil {
+		return err
+	}
+	if !applied {
+		schema, _ := assets.ReadFile("schema.sql")
+		if _, err = tx.Exec(ctx, string(schema)); err != nil {
+			return errors.New("database migration failed")
+		}
+	}
+	return tx.Commit(ctx)
+}

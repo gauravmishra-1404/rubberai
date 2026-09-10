@@ -1,0 +1,28 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: rubberai
+      POSTGRES_DB: rubberai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rubberai -d rubberai"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  app:
+    build: .
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      DATABASE_URL: postgres://rubberai:${POSTGRES_PASSWORD}@db:5432/rubberai?sslmode=disable
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:8080}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      PRICING_JSON: ${PRICING_JSON:-{}}
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  postgres_data:
