@@ -7,6 +7,60 @@ and serves an embedded Svelte dashboard. An optional Go collector buffers events
 on disk. No LLM proxy, Kafka, Redis, external analytics database or cloud account
 is required.
 
+## Architecture
+
+Integrations send versioned HTTP JSON to one Go binary, which validates, prices,
+applies privacy rules and stores each event in PostgreSQL. The Svelte dashboard is
+compiled and embedded into that same binary, so a deployment is one process plus a
+database — no separate frontend server, message broker or analytics store.
+
+```
+  IDE / coding agent / CLI / any HTTP client
+                  |
+                  v
+        adapter (agent-specific)          integrations/
+                  |  standard event
+                  v
+        collector (optional, buffers to disk)   cmd/collector
+                  |
+                  v  POST /api/v1/events   Bearer <project key>
+  +---------------------------------------------------+
+  |  auth -> rate limit -> validate -> price ->        |   internal/platform
+  |  privacy -> idempotent insert                      |
+  +---------------------------------------------------+
+                  |
+                  v
+             PostgreSQL  (events + JSONB payload)
+                  |
+                  v
+        query / analytics  ->  embedded Svelte dashboard
+```
+
+Adapters are the only agent-aware code. They translate a tool's own events into
+the standard schema; the server has no branch on IDE, agent or language, and an
+unknown value is recorded rather than rejected. The
+[Claude Code adapter](integrations/claude-code/README.md) is the reference
+implementation.
+
+Sessions, traces and prompts are **projections of immutable events**, not
+separately editable records — a trace is every event sharing a `trace_id`. That is
+why ingestion stays a single insert, and why correcting history means sending a
+new event rather than mutating an old one.
+
+Correctness properties the design depends on:
+
+- **Idempotency** — `(project_id, event_id)` is the primary key, so a client may
+  safely retry any request after a timeout without double-counting usage.
+- **Privacy before persistence** — payloads are filtered on the way in, so a
+  project set to metadata-only never stores prompt text at all.
+- **Honest attribution** — an `AI` change source without evidence is downgraded to
+  `UNKNOWN`; the platform reports what integrations assert, and does not infer.
+- **Exact money** — costs are decimal strings summed as rationals, kept separate
+  by currency and by actual/estimated.
+
+[docs/architecture.md](docs/architecture.md) records the decisions and their
+trade-offs; [docs/api.md](docs/api.md) is the event contract.
+
 ## Start locally
 
 ```sh

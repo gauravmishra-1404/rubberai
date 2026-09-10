@@ -3,6 +3,7 @@
 Go modular monolith + PostgreSQL + Svelte/TypeScript. The public contract is HTTP
 JSON; no business logic may depend on a particular IDE, agent or source language.
 Read docs/specification.md and docs/architecture.md before extending the product.
+See CLAUDE.md for changes Claude made, including which of them are unbuilt.
 
 - Build: `make build` (Go 1.27+, Node.js 22.12+).
 - Check: `make check`.
