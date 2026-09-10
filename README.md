@@ -1,0 +1,128 @@
+# rubberai
+
+Understand AI coding activity across projects, agents, IDEs and programming languages.
+
+A Go modular monolith receives versioned HTTP events, stores them in PostgreSQL,
+and serves an embedded Svelte dashboard. An optional Go collector buffers events
+on disk. No LLM proxy, Kafka, Redis, external analytics database or cloud account
+is required.
+
+## Start locally
+
+```sh
+cp .env.example .env
+# Set POSTGRES_PASSWORD to a random URL-safe password in .env.
+docker compose up --build
+```
+
+Open http://localhost:8080. Create an organization account, create a project,
+then generate a key under **Connect a project**. Keys are shown once and only
+grant event ingestion. Use the account's user ID or your own external user ID in
+events. Email is not required.
+
+Default collection is **METADATA_ONLY**. Change it under **Privacy & settings**
+when needed. Changing the policy affects future events, not already stored data.
+
+## Native development
+
+Requires Go 1.27+, Node.js 22.12+, npm and PostgreSQL 17+.
+
+```sh
+make build
+export DATABASE_URL='postgres://USER:PASSWORD@localhost:5432/rubberai?sslmode=disable'
+export APP_ORIGIN='http://localhost:8080'
+./bin/rubberai
+```
+
+The server defaults to 127.0.0.1:8080. `LISTEN_ADDR` overrides it. For Vite hot
+reload, run `npm run dev` inside `web` and set backend `APP_ORIGIN` to
+`http://localhost:5173`. Vite proxies the API to port 8080. No Node server is
+required in production.
+
+Use an HTTPS origin behind your TLS reverse proxy for a remote deployment; the
+server then marks session cookies Secure. Docker Compose binds the app to
+localhost and does not publish the database. Database backup and deployment
+operations are outside the local setup.
+
+## Send an event
+
+```sh
+export RUBBERAI_API_KEY='<generated project key>'
+export RUBBERAI_PROJECT_ID='<project ID>'
+python3 examples/send.py
+```
+
+See [the API contract](docs/api.md), [OpenAPI](docs/openapi.json), and examples
+for curl, Python, JavaScript and Java. Prompt contents, model names, usage and
+Git fields are optional. The platform records supplied observations; it cannot
+discover hidden prompts or usage inside an IDE without an adapter.
+
+## Optional durable collector
+
+```sh
+export RUBBERAI_URL='http://localhost:8080'
+export RUBBERAI_API_KEY='<project ingestion key>'
+export RUBBERAI_LOCAL_TOKEN='<random value of at least 32 characters>'
+export RUBBERAI_OUTBOX="$HOME/.local/state/rubberai/outbox"
+./bin/rubberai-collector
+```
+
+Send events to `http://127.0.0.1:4319/api/v1/events`, using the **local token** as
+Bearer authorization. The collector saves each request to disk before returning
+202. It retains events during outages and retries with unchanged IDs. The server
+deduplicates retries. The Python SDK can target either the collector or server.
+
+The default outbox holds at most 32 MiB / 1,000 requests. Full queues return 503;
+the SDK uses a bounded nonblocking queue and reports overflow through its `dropped`
+counter. Inspect `/api/v1/status` on the collector with the local token. Invalid
+payloads are retained as `.rejected` files for inspection and count toward the
+limit. These files may contain sensitive data: use a private directory and a
+single collector per outbox. Privacy filtering occurs at the server; integrations
+should omit sensitive content before it reaches disk when using metadata-only mode.
+
+## Cost estimates
+
+`PRICING_JSON` supplies explicit per-million token prices, keyed by provider/model:
+
+```json
+{"example/model":{"input_per_million":"1.0","output_per_million":"2.0","currency":"USD","version":"internal-2026-09"}}
+```
+
+These are illustrative rates, not provider prices. Estimates require both input
+and output token counts. Supplied costs take precedence. This initial estimator
+uses one input and one output rate; it does not model cache discounts, tiers or
+other provider billing rules. Supply calculated costs for those pricing schemes.
+Cached and reasoning tokens are reported separately and are never added to totals
+a second time. A partial measurement does not become a complete total.
+
+## Verification
+
+```sh
+export TEST_DATABASE_URL='postgres://USER:PASSWORD@localhost:5432/rubberai_test?sslmode=disable'
+make test
+make check
+# With the local application running:
+cd web && npm run test:e2e
+```
+
+Integration tests create organizations and events in the selected test database;
+they do not delete existing data. Without TEST_DATABASE_URL, Go reports the
+database test as skipped. Browser tests use a temporary organization and the real
+API. [Validation notes](docs/validation.md) record checks performed for this build.
+
+## Initial scope and limits
+
+Implemented: organization accounts, projects, scoped/revocable keys, atomic event
+batches, validation, project-scoped deduplication, privacy modes, usage/cost
+analytics, trace/prompt drill-down, file/Git metadata, a Go outbox collector and a
+dependency-free Python SDK.
+
+External user identities are integration assertions, not independently verified
+login identities. Account registration creates a new organization; invitations,
+shared organization membership and password recovery are not implemented yet.
+Sessions, traces and prompts are projections of immutable events rather than
+separately editable records. Retention is manual in this first version. Aggregate
+groups are capped at 100 and event pages at 1,000 rows. A single backend instance
+enforces in-memory per-minute request limits; distributed rate limiting is not
+implemented. No automatic IDE/agent instrumentation or production deployment has
+been performed.

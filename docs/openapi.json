@@ -1,0 +1,1233 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "rubberai API",
+    "version": "0.1.0",
+    "description": "Language-independent AI activity ingestion. See docs/api.md for retry and privacy semantics."
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "security": [
+    {
+      "session": []
+    }
+  ],
+  "paths": {
+    "/auth/register": {
+      "post": {
+        "summary": "Register",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication"
+          },
+          "403": {
+            "description": "Wrong project or origin"
+          },
+          "404": {
+            "description": "Missing or inaccessible resource"
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is 60 seconds"
+          },
+          "503": {
+            "description": "Temporary storage failure; retries must preserve event IDs"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "username",
+                  "password",
+                  "display_name",
+                  "organization"
+                ],
+                "properties": {
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  },
+                  "display_name": {
+                    "type": "string"
+                  },
+                  "organization": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "summary": "Login",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication"
+          },
+          "403": {
+            "description": "Wrong project or origin"
+          },
+          "404": {
+            "description": "Missing or inaccessible resource"
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is 60 seconds"
+          },
+          "503": {
+            "description": "Temporary storage failure; retries must preserve event IDs"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "username",
+                  "password"
+                ],
+                "properties": {
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "summary": "Invalidate the current session",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication"
+          },
+          "403": {
+            "description": "Wrong project or origin"
+          },
+          "404": {
+            "description": "Missing or inaccessible resource"
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is 60 seconds"
+          },
+          "503": {
+            "description": "Temporary storage failure; retries must preserve event IDs"
+          }
+        }
+      }
+    },
+    "/me": {
+      "get": {
+        "summary": "Current account identity",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication"
+          },
+          "403": {
+            "description": "Wrong project or origin"
+          },
+          "404": {
+            "description": "Missing or inaccessible resource"
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is 60 seconds"
+          },
+          "503": {
+            "description": "Temporary storage failure; retries must preserve event IDs"
+          }
+        }
+      }
+    },
+    "/projects": {
+      "get": {
+        "summary": "List organization projects",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication"
+          },
+          "403": {
+            "description": "Wrong project or origin"
+          },
+          "404": {
+            "description": "Missing or inaccessible resource"
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is 60 seconds"
+          },
+          "503": {
+            "description": "Temporary storage failure; retries must preserve event IDs"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create project",
+        "responses": {
+          "201": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication"
+          },
+          "403": {
+            "description": "Wrong project or origin"
+          },
+          "404": {
+            "description": "Missing or inaccessible resource"
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is 60 seconds"
+          },
+          "503": {
+            "description": "Temporary storage failure; retries must preserve event IDs"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Project"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project}": {
+      "patch": {
+        "summary": "Update project settings",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication"
+          },
+          "403": {
+            "description": "Wrong project or origin"
+          },
+          "404": {
+            "description": "Missing or inaccessible resource"
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is 60 seconds"
+          },
+          "503": {
+            "description": "Temporary storage failure; retries must preserve event IDs"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Project"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/projects/{project}/keys": {
+      "get": {
+        "summary": "List key metadata without secret values",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication"
+          },
+          "403": {
+            "description": "Wrong project or origin"
+          },
+          "404": {
+            "description": "Missing or inaccessible resource"
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is 60 seconds"
+          },
+          "503": {
+            "description": "Temporary storage failure; retries must preserve event IDs"
+          }
+        },
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "post": {
+        "summary": "Create an ingestion key, shown once",
+        "responses": {
+          "201": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication"
+          },
+          "403": {
+            "description": "Wrong project or origin"
+          },
+          "404": {
+            "description": "Missing or inaccessible resource"
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is 60 seconds"
+          },
+          "503": {
+            "description": "Temporary storage failure; retries must preserve event IDs"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/projects/{project}/keys/{key}": {
+      "delete": {
+        "summary": "Revoke ingestion key",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication"
+          },
+          "403": {
+            "description": "Wrong project or origin"
+          },
+          "404": {
+            "description": "Missing or inaccessible resource"
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is 60 seconds"
+          },
+          "503": {
+            "description": "Temporary storage failure; retries must preserve event IDs"
+          }
+        },
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/events": {
+      "post": {
+        "summary": "Atomically ingest one event or a batch",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "integer"
+                    },
+                    "duplicates": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication"
+          },
+          "403": {
+            "description": "Wrong project or origin"
+          },
+          "404": {
+            "description": "Missing or inaccessible resource"
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is 60 seconds"
+          },
+          "503": {
+            "description": "Temporary storage failure; retries must preserve event IDs"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Event"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "events"
+                    ],
+                    "properties": {
+                      "events": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 100,
+                        "items": {
+                          "$ref": "#/components/schemas/Event"
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "projectKey": []
+          }
+        ]
+      }
+    },
+    "/projects/{project}/events": {
+      "get": {
+        "summary": "Query events",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication"
+          },
+          "403": {
+            "description": "Wrong project or origin"
+          },
+          "404": {
+            "description": "Missing or inaccessible resource"
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is 60 seconds"
+          },
+          "503": {
+            "description": "Temporary storage failure; retries must preserve event IDs"
+          }
+        },
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "prompt_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "event_type",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ide",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repository",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000,
+              "default": 0
+            }
+          }
+        ]
+      }
+    },
+    "/projects/{project}/analytics": {
+      "get": {
+        "summary": "Query analytics",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication"
+          },
+          "403": {
+            "description": "Wrong project or origin"
+          },
+          "404": {
+            "description": "Missing or inaccessible resource"
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is 60 seconds"
+          },
+          "503": {
+            "description": "Temporary storage failure; retries must preserve event IDs"
+          }
+        },
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "prompt_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "event_type",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ide",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repository",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group_by",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "user",
+                "agent",
+                "model",
+                "ide",
+                "language",
+                "day"
+              ],
+              "default": "user"
+            }
+          }
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "summary": "Operator process metrics",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication"
+          },
+          "403": {
+            "description": "Wrong project or origin"
+          },
+          "404": {
+            "description": "Missing or inaccessible resource"
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is 60 seconds"
+          },
+          "503": {
+            "description": "Temporary storage failure; retries must preserve event IDs"
+          }
+        },
+        "security": [
+          {
+            "operatorToken": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "session": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "rubberai_session"
+      },
+      "projectKey": {
+        "type": "http",
+        "scheme": "bearer"
+      },
+      "operatorToken": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "Event": {
+        "type": "object",
+        "required": [
+          "event_id",
+          "event_type",
+          "project_id",
+          "timestamp"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "trace_id": {
+            "type": "string"
+          },
+          "prompt_id": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "tool_name": {
+            "type": "string"
+          },
+          "tool_call_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "commit_sha": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "received_at": {
+            "type": "string",
+            "format": "date-time",
+            "readOnly": true
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "agent": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            }
+          },
+          "ide": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            }
+          },
+          "model": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "usage": {
+            "type": "object",
+            "description": "Only on llm.request.completed. Missing fields remain unknown.",
+            "properties": {
+              "input_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000000
+              },
+              "output_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000000
+              },
+              "cached_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000000
+              },
+              "reasoning_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000000
+              },
+              "total_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000000
+              }
+            }
+          },
+          "cost": {
+            "type": "object",
+            "required": [
+              "amount",
+              "currency",
+              "type"
+            ],
+            "properties": {
+              "amount": {
+                "type": "string",
+                "pattern": "^[0-9]{1,16}(\\.[0-9]{1,12})?$"
+              },
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "actual",
+                  "estimated"
+                ]
+              },
+              "pricing_version": {
+                "type": "string"
+              }
+            }
+          },
+          "file": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "old_path": {
+                "type": "string"
+              },
+              "language": {
+                "type": "string"
+              },
+              "operation": {
+                "type": "string"
+              },
+              "diff": {
+                "type": "string"
+              },
+              "before_hash": {
+                "type": "string"
+              },
+              "after_hash": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "string"
+              },
+              "change_source": {
+                "type": "string",
+                "enum": [
+                  "AI",
+                  "HUMAN",
+                  "UNKNOWN"
+                ]
+              },
+              "lines_added": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              },
+              "lines_removed": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              }
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Retained only in FULL privacy mode."
+          }
+        }
+      },
+      "Project": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "repository_url": {
+            "type": "string"
+          },
+          "privacy": {
+            "type": "string",
+            "enum": [
+              "METADATA_ONLY",
+              "REDACTED",
+              "FULL"
+            ],
+            "default": "METADATA_ONLY"
+          },
+          "track_diffs": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
