@@ -211,7 +211,11 @@ const aggregateSQL = `jsonb_build_object(
  'total_tokens',coalesce(sum((payload->'usage'->>'total_tokens')::numeric),0),
  'requests_with_usage',count(*) FILTER(WHERE payload ? 'usage'),
  'requests_with_total',count(*) FILTER(WHERE payload->'usage' ? 'total_tokens'),
- 'requests_with_cost',count(*) FILTER(WHERE payload ? 'cost')
+ 'requests_with_cost',count(*) FILTER(WHERE payload ? 'cost'),
+ 'tools',count(*) FILTER(WHERE event_type LIKE 'tool.%'),
+ 'started_at',min(timestamp),'ended_at',max(timestamp),
+ 'prompt_text',max(payload->>'prompt') FILTER(WHERE event_type='prompt.created'),
+ 'models',(SELECT jsonb_agg(DISTINCT payload->'model'->>'name') FILTER(WHERE payload->'model'->>'name' IS NOT NULL))
  )`
 
 func (a *App) analytics(w http.ResponseWriter, r *http.Request) {
@@ -232,13 +236,20 @@ func (a *App) analytics(w http.ResponseWriter, r *http.Request) {
 	if group == "" {
 		group = "user"
 	}
-	groups := map[string]string{"user": "NULLIF(user_id,'')", "agent": "payload->'agent'->>'name'", "model": "concat(payload->'model'->>'provider','/',payload->'model'->>'name')", "ide": "payload->'ide'->>'name'", "language": "payload->>'language'", "day": "to_char(timestamp AT TIME ZONE 'UTC','YYYY-MM-DD')"}
+	// prompt and trace group one user-driven turn together: the agentic loop that
+	// follows a single prompt collapses into one row instead of dominating the list.
+	groups := map[string]string{"user": "NULLIF(user_id,'')", "agent": "payload->'agent'->>'name'", "model": "concat(payload->'model'->>'provider','/',payload->'model'->>'name')", "ide": "payload->'ide'->>'name'", "language": "payload->>'language'", "day": "to_char(timestamp AT TIME ZONE 'UTC','YYYY-MM-DD')", "prompt": "NULLIF(prompt_id,'')", "trace": "NULLIF(trace_id,'')"}
 	expr, ok := groups[group]
 	if !ok {
-		fail(w, 400, "INVALID_GROUP", "group_by must be user, agent, model, ide, language or day")
+		fail(w, 400, "INVALID_GROUP", "group_by must be user, agent, model, ide, language, day, prompt or trace")
 		return
 	}
-	rows, err := a.db.Query(r.Context(), `SELECT coalesce(`+expr+`,'unknown'),`+aggregateSQL+` FROM events WHERE `+where+` GROUP BY 1 ORDER BY count(*) DESC LIMIT 100`, args...)
+	// Turn-shaped groups read best newest-first; the rest stay ranked by volume.
+	order := "count(*) DESC"
+	if group == "prompt" || group == "trace" {
+		order = "max(timestamp) DESC"
+	}
+	rows, err := a.db.Query(r.Context(), `SELECT coalesce(`+expr+`,'unknown'),`+aggregateSQL+` FROM events WHERE `+where+` GROUP BY 1 ORDER BY `+order+` LIMIT 100`, args...)
 	if err != nil {
 		fail(w, 500, "STORAGE_ERROR", "Could not group events")
 		return
