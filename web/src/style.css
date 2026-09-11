@@ -173,6 +173,12 @@ pre.diff .hunk { color: var(--hunk); display: block; }
    inline, "1" and "+520" collide into "1+520" and read as one number. */
 .delta { display: block; font-size: 10px; font-weight: 500; margin-top: 3px; }
 
-/* Machine address on a prompt row: present but subordinate to the prompt itself,
-   and carrying the hostname as a title rather than spending a second line on it. */
-.host { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+/* Identity sits behind the username rather than on the row: an address and an
+   email are rarely what you are scanning for, but you want them without leaving
+   the page. The dotted underline marks the name as carrying more, so the detail
+   is discoverable instead of hidden. */
+.who.known {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: help;
+}

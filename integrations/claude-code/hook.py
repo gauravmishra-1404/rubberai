@@ -168,10 +168,10 @@ def base_event(config: dict, project: dict, payload: dict, event_type: str, even
         "project_id": project["project_id"],
         "timestamp": now(),
         "agent": {"name": AGENT_NAME},
-        # Git identity is the name a developer already signs work with, so it
-        # identifies a person across machines where a local account name does not.
-        "user_id": (config.get("user_id") or who.get("email")
-                    or os.environ.get("USER") or "unknown"),
+        # The short account name stays the visible label; the email and address
+        # are detail carried in metadata. Keeping user_id short also keeps it
+        # stable against history recorded before identity was collected.
+        "user_id": config.get("user_id") or os.environ.get("USER") or "unknown",
     }
     session_id = payload.get("session_id")
     if session_id:
@@ -351,6 +351,13 @@ def identity(cwd: str) -> dict:
     email = (git(cwd, "config", "user.email") or "").strip()
     if email:
         who["email"] = email
+    else:
+        # No git identity configured: the device login is the only account name
+        # available, so record that rather than leaving the field blank.
+        login = os.environ.get("USER") or os.environ.get("LOGNAME")
+        if login:
+            who["email"] = login + "@" + (socket.gethostname() or "localhost")
+            who["identity_source"] = "device-login"
     try:
         who["host"] = socket.gethostname()
     except OSError:
