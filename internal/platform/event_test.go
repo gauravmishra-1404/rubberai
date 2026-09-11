@@ -12,7 +12,7 @@ func baseEvent() Event {
 }
 func TestUsageDoesNotDoubleCountSubsets(t *testing.T) {
 	e := baseEvent()
-	e.Usage = &Usage{Input: count(100), Output: count(50), Cached: count(20), Reasoning: count(10)}
+	e.Usage = &Usage{Input: count(100), Output: count(50), Cached: count(20), CacheWrite: count(5), Reasoning: count(10)}
 	if err := e.Validate(); err != nil {
 		t.Fatal(err)
 	}

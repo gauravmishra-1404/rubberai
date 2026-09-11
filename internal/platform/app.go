@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+ schema "rubberai/internal/event"
 	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
@@ -130,7 +131,7 @@ func New(ctx context.Context, dsn, origin string) (*App, error) {
 			return nil, errors.New("invalid PRICING_JSON")
 		}
 		for _, p := range a.prices {
-			if !decimalAmount.MatchString(p.Input) || !decimalAmount.MatchString(p.Output) || !currencyCode.MatchString(p.Currency) || p.Version == "" {
+			if !schema.ValidPrice(p.Input,p.Currency) || !schema.ValidPrice(p.Output,p.Currency) || p.Version == "" {
 				db.Close()
 				return nil, errors.New("invalid pricing entry")
 			}
@@ -302,7 +303,7 @@ func (a *App) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b.Username = strings.ToLower(strings.TrimSpace(b.Username))
-	if !identifier.MatchString(b.Username) || len(b.Password) < 12 || len(b.Password) > 256 || len(strings.TrimSpace(b.DisplayName)) == 0 || len(b.DisplayName) > 120 || len(strings.TrimSpace(b.Organization)) == 0 || len(b.Organization) > 120 {
+	if !schema.ValidIdentifier(b.Username) || len(b.Password) < 12 || len(b.Password) > 256 || len(strings.TrimSpace(b.DisplayName)) == 0 || len(b.DisplayName) > 120 || len(strings.TrimSpace(b.Organization)) == 0 || len(b.Organization) > 120 {
 		fail(w, 400, "INVALID_REGISTRATION", "Provide username, display name, organization and a 12–256 character password")
 		return
 	}
