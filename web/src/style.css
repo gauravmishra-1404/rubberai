@@ -236,3 +236,16 @@ pre.diff .hunk { color: var(--hunk); display: block; }
   .filelist { max-height: 32vh; }
 }
 .fdelta { font-size: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* Summary column: one line in the table, the whole reply in the sheet. The cell
+   truncates rather than wrapping so the numeric columns stay on a single row. */
+td.summary { max-width: 260px; }
+.summary-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+  min-height: 0;
+  margin-top: 12px;
+  font-size: 13px;
+  line-height: 1.65;
+}

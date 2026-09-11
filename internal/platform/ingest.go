@@ -235,7 +235,8 @@ const aggregateSQL = `jsonb_build_object(
  'prompt_agent',max(payload->'agent'->>'name') FILTER(WHERE event_type='prompt.created'),
  'prompt_host',max(payload->'metadata'->>'host') FILTER(WHERE event_type='prompt.created'),
  'prompt_ip',max(payload->'metadata'->>'ip') FILTER(WHERE event_type='prompt.created'),
- 'prompt_email',max(payload->'metadata'->>'email') FILTER(WHERE event_type='prompt.created')
+ 'prompt_email',max(payload->'metadata'->>'email') FILTER(WHERE event_type='prompt.created'),
+ 'prompt_summary',max(payload->'metadata'->>'summary') FILTER(WHERE event_type='prompt.summarized')
  )`
 
 func (a *App) analytics(w http.ResponseWriter, r *http.Request) {
