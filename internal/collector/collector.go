@@ -4,6 +4,11 @@ package collector
 
 import (
 	"bytes"
+ "runtime"
+ "strconv"
+ "sync/atomic"
+ "rubberai/internal/event"
+ "rubberai/internal/integrations"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -24,7 +29,9 @@ type Collector struct {
 	Dir, Endpoint, Key, LocalToken string
 	MaxBytes                       int64
 	Client                         *http.Client
-	mu                             sync.Mutex
+	ProjectID, UserID, IDE, Privacy string
+ received, skipped, uploaded atomic.Int64
+ mu                             sync.Mutex
 	wake                           chan struct{}
 }
 
@@ -45,7 +52,7 @@ func New(dir, endpoint, key, localToken string) (*Collector, error) {
 	if err = os.Chmod(dir, 0700); err != nil {
 		return nil, err
 	}
-	return &Collector{Dir: dir, Endpoint: strings.TrimRight(endpoint, "/") + "/api/v1/events", Key: key, LocalToken: localToken, MaxBytes: 32 << 20, wake: make(chan struct{}, 1), Client: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	return &Collector{Dir: dir, Endpoint: strings.TrimRight(endpoint, "/") + "/api/v1/events", Key: key, LocalToken: localToken, MaxBytes: 32 << 20, Privacy: "METADATA_ONLY", wake: make(chan struct{}, 1), Client: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 func (c *Collector) usage() (int64, int, int, error) {
 	entries, err := os.ReadDir(c.Dir)
@@ -73,7 +80,7 @@ func (c *Collector) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
-		if subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")), []byte(c.LocalToken)) != 1 {
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") || subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")), []byte(c.LocalToken)) != 1 {
 			http.Error(w, `{"error":{"code":"UNAUTHENTICATED"}}`, 401)
 			return
 		}
@@ -85,10 +92,11 @@ func (c *Collector) Handler() http.Handler {
 				http.Error(w, `{"error":{"code":"OUTBOX_UNAVAILABLE"}}`, 503)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"queue_bytes": size, "pending": pending, "rejected": rejected, "max_bytes": c.MaxBytes})
+			_ = json.NewEncoder(w).Encode(map[string]any{"queue_bytes": size, "pending": pending, "rejected": rejected, "max_bytes": c.MaxBytes, "project_id": c.ProjectID, "privacy": c.Privacy, "received_events": c.received.Load(), "skipped_logs": c.skipped.Load(), "uploaded_batches": c.uploaded.Load(), "protocols": []string{"http-json", "otlp-http-json-logs"}})
 			return
 		}
-		if r.Method != "POST" || r.URL.Path != "/api/v1/events" {
+		otlp := r.URL.Path == "/v1/logs"
+		if r.Method != "POST" || (r.URL.Path != "/api/v1/events" && !otlp) {
 			http.Error(w, `{"error":{"code":"NOT_FOUND"}}`, 404)
 			return
 		}
@@ -97,6 +105,30 @@ func (c *Collector) Handler() http.Handler {
 			http.Error(w, `{"error":{"code":"INVALID_JSON"}}`, 400)
 			return
 		}
+        if r.Header.Get("Content-Encoding")!="" || (otlp && !strings.HasPrefix(r.Header.Get("Content-Type"),"application/json")) {
+            http.Error(w, `{"error":{"code":"UNSUPPORTED_ENCODING","message":"Use uncompressed OTLP HTTP JSON"}}`,415);return
+        }
+        var events []event.Event
+        skipped := 0
+        if otlp {
+            events, skipped, err = integrations.Logs(body, integrations.Options{ProjectID:c.ProjectID,UserID:c.UserID,IDE:c.IDE})
+        } else { events,err = event.Decode(body) }
+        if err!=nil {http.Error(w, `{"error":{"code":"INVALID_EVENT","message":"Invalid event or OTLP mapping; check schema, project, timestamp and token fields"}}`,400);return}
+        for i:=range events {
+            if c.ProjectID!="" && events[i].ProjectID!=c.ProjectID {http.Error(w, `{"error":{"code":"PROJECT_MISMATCH"}}`,403);return}
+            events[i].ApplyPrivacy(c.Privacy, false)
+        }
+        c.skipped.Add(int64(skipped))
+        acknowledge := func() {
+            if otlp {
+                response:=map[string]any{}
+                if skipped>0 {response["partialSuccess"]=map[string]any{"rejectedLogRecords":strconv.Itoa(skipped),"errorMessage":"Unsupported log records were skipped"}}
+                _=json.NewEncoder(w).Encode(response)
+            } else {w.WriteHeader(202);_,_=w.Write([]byte(`{"queued":true}`))}
+        }
+        if len(events)==0 {acknowledge();return}
+        body,err=json.Marshal(map[string]any{"events":events})
+        if err!=nil || len(body)>1<<20 {http.Error(w, `{"error":{"code":"PAYLOAD_TOO_LARGE"}}`,413);return}
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		size, pending, rejected, err := c.usage()
@@ -128,7 +160,7 @@ func (c *Collector) Handler() http.Handler {
 		}
 		if err == nil {
 			if d, e := os.Open(c.Dir); e == nil {
-				err = d.Sync()
+				if runtime.GOOS != "windows" {err = d.Sync()}
 				_ = d.Close()
 			} else {
 				err = e
@@ -143,8 +175,8 @@ func (c *Collector) Handler() http.Handler {
 		case c.wake <- struct{}{}:
 		default:
 		}
-		w.WriteHeader(202)
-		_, _ = w.Write([]byte(`{"queued":true}`))
+		c.received.Add(int64(len(events)))
+		acknowledge()
 	})
 }
 
@@ -184,7 +216,9 @@ func (c *Collector) FlushOne(ctx context.Context) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if res.StatusCode >= 200 && res.StatusCode < 300 {
-		return true, os.Remove(name)
+		err := os.Remove(name)
+		if err==nil {c.uploaded.Add(1)}
+		return true, err
 	}
 	switch res.StatusCode {
 	case 400, 404, 413, 415, 422:
