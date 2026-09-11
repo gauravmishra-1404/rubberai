@@ -35,6 +35,7 @@ AGENT_NAME = "claude-code"
 BATCH_LIMIT = 100
 HTTP_TIMEOUT = 5
 PROMPT_LIMIT = 20000
+SUMMARY_LIMIT = 2000
 DIFF_LIMIT = 40000
 SYNTHETIC_MODEL = "<synthetic>"
 
@@ -455,6 +456,7 @@ def flush_transcript(config: dict, project: dict, payload: dict, state: dict) ->
 
     events = {}
     position = offset
+    summaries = {}
     for line in complete.split("\n"):
         line_start = position
         position += len(line.encode("utf-8")) + 1
@@ -470,6 +472,13 @@ def flush_transcript(config: dict, project: dict, payload: dict, state: dict) ->
             continue
         if record.get("type") != "assistant":
             continue
+        # The agent's own closing words for the turn. Recorded, never generated:
+        # the platform does not summarise anything itself, it stores what the
+        # agent already said, which is why this needs no model of its own.
+        if config.get("send_prompts") and turn.get("prompt_id"):
+            for block in (record.get("message") or {}).get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "text" and block.get("text", "").strip():
+                    summaries[turn["prompt_id"]] = block["text"].strip()
         message = record.get("message") or {}
         usage = message.get("usage") or {}
         if not usage:
@@ -526,6 +535,19 @@ def flush_transcript(config: dict, project: dict, payload: dict, state: dict) ->
         if previous and previous.get("prompt_id"):
             turn = {"prompt_id": previous["prompt_id"]}
         events[event["event_id"]] = attach_turn(event, turn)
+
+    for prompt_id, text in summaries.items():
+        # Deterministic id keyed on the turn, so a re-flush replaces rather than
+        # duplicates, and a longer closing message supersedes an earlier partial.
+        summary = base_event(
+            config, project, payload, "prompt.summarized",
+            "evt_summary_" + hashlib.sha256(prompt_id.encode()).hexdigest()[:32],
+        )
+        summary["prompt_id"] = prompt_id
+        summary["trace_id"] = prompt_id
+        summary["metadata"] = dict(summary.get("metadata") or {},
+                                   summary=text[:SUMMARY_LIMIT])
+        events[summary["event_id"]] = summary
 
     if not events or send(config, project, list(events.values())):
         state["offset"] = end
