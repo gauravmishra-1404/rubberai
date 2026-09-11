@@ -11,7 +11,7 @@ Requests that have a body must use JSON. Errors use:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | /auth/register | `{username,password,display_name,organization}`; creates organization and cookie session |
+| POST | /auth/register | `{username,password,display_name,organization,email?}`; creates organization and cookie session |
 | POST | /auth/login | `{username,password}`; establishes a 24-hour cookie session |
 | POST | /auth/logout | Invalidates session |
 | GET | /me | Current user ID, display name and organization ID |
@@ -19,6 +19,14 @@ Requests that have a body must use JSON. Errors use:
 | PATCH | /projects/{id} | Update name, description, repository_url, privacy or track_diffs |
 | GET, POST | /projects/{id}/keys | List / create ingestion keys; POST body `{name}` |
 | DELETE | /projects/{id}/keys/{key_id} | Revoke a key |
+
+`email` is optional. When supplied it is validated for shape, normalised (the
+domain is lowercased, the local part is not, since only the domain is
+case-insensitive) and checked for a published mail host, which rejects a
+mistyped domain. A lookup that cannot complete - no resolver, an offline
+deployment - accepts the address and records it as unchecked rather than
+refusing the registration. The check establishes that a domain can receive
+mail, never that the person owns the address. Returns 400 `INVALID_EMAIL`.
 
 The session cookie is HttpOnly, SameSite=Strict, and Secure when APP_ORIGIN uses
 HTTPS. Browser writes must originate from APP_ORIGIN. Ingestion API keys cannot

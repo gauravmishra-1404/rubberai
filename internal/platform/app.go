@@ -26,7 +26,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-//go:embed schema.sql web/*
+//go:embed schema.sql schema2.sql web/*
 var assets embed.FS
 
 type rateWindow struct {
@@ -145,6 +145,14 @@ func New(ctx context.Context, dsn, origin string) (*App, error) {
 		}
 	}
 	return a, nil
+}
+// nullTime keeps an unchecked timestamp out of the column entirely, so a stored
+// value always means the check actually ran.
+func nullTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
 }
 func envInt(key string, fallback int) int {
 	v, err := strconv.Atoi(os.Getenv(key))
@@ -305,6 +313,7 @@ func (a *App) register(w http.ResponseWriter, r *http.Request) {
 		Password     string `json:"password"`
 		DisplayName  string `json:"display_name"`
 		Organization string `json:"organization"`
+		Email        string `json:"email"`
 	}
 	if !decode(w, r, &b) {
 		return
@@ -314,18 +323,25 @@ func (a *App) register(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "INVALID_REGISTRATION", "Provide username, display name, organization and a 12–256 character password")
 		return
 	}
+	// Optional by design: an account is identified by its username, and the
+	// specification forbids requiring an address to identify anyone.
+	email, checkedAt, err := checkEmail(r.Context(), b.Email)
+	if err != nil {
+		fail(w, 400, "INVALID_EMAIL", err.Error())
+		return
+	}
 	salt := token("")
 	hash := salt + ":" + passwordHash(b.Password, salt)
 	u := User{token("usr_"), token("org_"), b.DisplayName}
-	tx, err := a.db.Begin(r.Context())
-	if err != nil {
+	tx, beginErr := a.db.Begin(r.Context())
+	if beginErr != nil {
 		fail(w, 503, "STORAGE_ERROR", "Database unavailable")
 		return
 	}
 	defer tx.Rollback(r.Context())
 	_, err = tx.Exec(r.Context(), `INSERT INTO organizations(id,name) VALUES($1,$2)`, u.OrganizationID, b.Organization)
 	if err == nil {
-		_, err = tx.Exec(r.Context(), `INSERT INTO users(id,organization_id,username,display_name,password_hash) VALUES($1,$2,$3,$4,$5)`, u.ID, u.OrganizationID, b.Username, b.DisplayName, hash)
+		_, err = tx.Exec(r.Context(), `INSERT INTO users(id,organization_id,username,display_name,password_hash,email,email_domain_checked_at) VALUES($1,$2,$3,$4,$5,NULLIF($6,''),$7)`, u.ID, u.OrganizationID, b.Username, b.DisplayName, hash, email, nullTime(checkedAt))
 	}
 	if err != nil {
 		fail(w, 409, "REGISTRATION_FAILED", "Could not register; username may already exist")
@@ -528,14 +544,25 @@ func migrate(ctx context.Context, db *pgxpool.Pool) error {
 	if _, err = tx.Exec(ctx, "CREATE TABLE IF NOT EXISTS schema_migrations(version integer PRIMARY KEY)"); err != nil {
 		return err
 	}
-	var applied bool
-	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=1)").Scan(&applied); err != nil {
-		return err
-	}
-	if !applied {
-		schema, _ := assets.ReadFile("schema.sql")
-		if _, err = tx.Exec(ctx, string(schema)); err != nil {
-			return errors.New("database migration failed")
+	// Each version is applied once and in order. An applied migration is never
+	// edited; a change to the schema is always a new numbered file.
+	for _, step := range []struct {
+		version int
+		file    string
+	}{{1, "schema.sql"}, {2, "schema2.sql"}} {
+		var applied bool
+		if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)", step.version).Scan(&applied); err != nil {
+			return err
+		}
+		if applied {
+			continue
+		}
+		statements, readErr := assets.ReadFile(step.file)
+		if readErr != nil {
+			return errors.New("missing migration " + step.file)
+		}
+		if _, err = tx.Exec(ctx, string(statements)); err != nil {
+			return errors.New("database migration failed at " + step.file)
 		}
 	}
 	return tx.Commit(ctx)
