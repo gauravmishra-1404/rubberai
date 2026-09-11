@@ -131,14 +131,17 @@
    the request/token columns stay aligned and scannable down the list. */
 .text-button.turn {
   display: block;
-  max-width: 34rem;
+  /* Bounded by its cell, not by a fixed width. A fixed 34rem was wider than the
+     prompt column once other columns were added, so the text ran across the
+     neighbouring cell instead of truncating. */
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: left;
 }
 @media (max-width: 600px) {
-  .text-button.turn { max-width: 60vw; }
+  .text-button.turn { max-width: 60vw; }   /* narrow viewport: bound by screen */
 }
 
 .prompt-content { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -147,7 +150,7 @@
 
 .two-col { grid-template-columns: 1fr; }
 .table-scroll td:not(:first-child), .table-scroll th { white-space: nowrap; overflow-wrap: normal; }
-.table-scroll td:first-child { min-width: 220px; }
+.table-scroll td:first-child { min-width: 220px; max-width: 30rem; }
 .prompt-detail td:first-child { min-width: 0; }
 
 .prompt-detail td { white-space: nowrap; overflow-wrap: normal; }
@@ -239,7 +242,31 @@ pre.diff .hunk { color: var(--hunk); display: block; }
 
 /* Summary column: one line in the table, the whole reply in the sheet. The cell
    truncates rather than wrapping so the numeric columns stay on a single row. */
-td.summary { max-width: 260px; }
+td.summary { width: 1%; white-space: nowrap; vertical-align: top; }
+/* A button's baseline follows its own box, which drops the digest to the
+   meta line. Align to the top so it sits level with the prompt and the
+   numeric columns. */
+.shape { display: inline-block; }
+/* The turn's shape, not its prose. Tabular figures keep the counts in the same
+   place down the column so rows can be compared without reading them. */
+.shape {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.shape .more {
+  margin-left: 7px;
+  font-family: var(--body-font, inherit);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--badge-ink);
+  background: var(--badge-bg);
+  border: 1px solid var(--badge-line);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
 .summary-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
