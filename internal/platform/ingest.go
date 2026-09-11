@@ -77,7 +77,7 @@ func (a *App) ingest(w http.ResponseWriter, r *http.Request) {
 		if e.Cost == nil && e.Usage != nil {
 			if p, ok := a.prices[e.Model.Provider+"/"+e.Model.Name]; ok {
 				if amount, err := Estimate(*e.Usage, p.Input, p.Output); err == nil {
-					e.Cost = &Cost{amount, p.Currency, "estimated", p.Version}
+					e.Cost = &Cost{Amount: amount, Currency: p.Currency, Type: "estimated", PricingVersion: p.Version}
 				}
 			}
 		}
@@ -202,20 +202,31 @@ const aggregateSQL = `jsonb_build_object(
  'sessions',count(DISTINCT NULLIF(session_id,'')),'traces',count(DISTINCT NULLIF(trace_id,'')),
  'users',count(DISTINCT NULLIF(user_id,'')),
  'files_changed',count(DISTINCT payload->'file'->>'path') FILTER(WHERE event_type IN ('file.created','file.modified','file.deleted','file.renamed')),
+ 'files',(SELECT jsonb_agg(DISTINCT payload->'file'->>'path') FILTER(WHERE event_type IN ('file.created','file.modified','file.deleted','file.renamed'))),
  'lines_added',coalesce(sum((payload->'file'->>'lines_added')::numeric),0),
  'lines_removed',coalesce(sum((payload->'file'->>'lines_removed')::numeric),0),
- 'input_tokens',coalesce(sum((payload->'usage'->>'input_tokens')::numeric),0),
- 'output_tokens',coalesce(sum((payload->'usage'->>'output_tokens')::numeric),0),
- 'cached_tokens',coalesce(sum((payload->'usage'->>'cached_tokens')::numeric),0),
- 'reasoning_tokens',coalesce(sum((payload->'usage'->>'reasoning_tokens')::numeric),0),
- 'total_tokens',coalesce(sum((payload->'usage'->>'total_tokens')::numeric),0),
+ 'input_tokens',sum((payload->'usage'->>'input_tokens')::numeric),
+ 'reported_input_tokens',count(payload->'usage'->>'input_tokens'),
+ 'output_tokens',sum((payload->'usage'->>'output_tokens')::numeric),
+ 'reported_output_tokens',count(payload->'usage'->>'output_tokens'),
+ 'cached_tokens',sum((payload->'usage'->>'cached_tokens')::numeric),
+ 'reported_cached_tokens',count(payload->'usage'->>'cached_tokens'),
+ 'reasoning_tokens',sum((payload->'usage'->>'reasoning_tokens')::numeric),
+ 'reported_reasoning_tokens',count(payload->'usage'->>'reasoning_tokens'),
+ 'total_tokens',sum((payload->'usage'->>'total_tokens')::numeric),
+ 'reported_total_tokens',count(payload->'usage'->>'total_tokens'),
+ 'cache_write_tokens',sum((payload->'usage'->>'cache_write_tokens')::numeric),
+ 'reported_cache_write_tokens',count(payload->'usage'->>'cache_write_tokens'),
  'requests_with_usage',count(*) FILTER(WHERE payload ? 'usage'),
  'requests_with_total',count(*) FILTER(WHERE payload->'usage' ? 'total_tokens'),
  'requests_with_cost',count(*) FILTER(WHERE payload ? 'cost'),
  'tools',count(*) FILTER(WHERE event_type LIKE 'tool.%'),
  'started_at',min(timestamp),'ended_at',max(timestamp),
  'prompt_text',max(payload->>'prompt') FILTER(WHERE event_type='prompt.created'),
- 'models',(SELECT jsonb_agg(DISTINCT payload->'model'->>'name') FILTER(WHERE payload->'model'->>'name' IS NOT NULL))
+ 'models',jsonb_agg(DISTINCT payload->'model'->>'name') FILTER(WHERE event_type='llm.request.completed' AND payload->'model'->>'name' IS NOT NULL),
+ 'prompt_user',max(user_id) FILTER(WHERE event_type='prompt.created'),
+ 'prompt_ide',max(payload->'ide'->>'name') FILTER(WHERE event_type='prompt.created'),
+ 'prompt_agent',max(payload->'agent'->>'name') FILTER(WHERE event_type='prompt.created')
  )`
 
 func (a *App) analytics(w http.ResponseWriter, r *http.Request) {
@@ -226,6 +237,9 @@ func (a *App) analytics(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fail(w, 400, "INVALID_FILTER", "Provide ordered RFC3339 from/to timestamps")
 		return
+	}
+	if r.URL.Query().Get("user_prompts") == "true" {
+		where = "project_id=$1 AND EXISTS (SELECT 1 FROM events matched WHERE matched.project_id=events.project_id AND matched.prompt_id=events.prompt_id AND matched.session_id=events.session_id AND " + where + ") AND EXISTS (SELECT 1 FROM events p WHERE p.project_id=events.project_id AND p.prompt_id=events.prompt_id AND p.session_id=events.session_id AND p.event_type='prompt.created')"
 	}
 	var totals json.RawMessage
 	if err = a.db.QueryRow(r.Context(), `SELECT `+aggregateSQL+` FROM events WHERE `+where, args...).Scan(&totals); err != nil {
@@ -245,11 +259,13 @@ func (a *App) analytics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Turn-shaped groups read best newest-first; the rest stay ranked by volume.
+	having := ""
 	order := "count(*) DESC"
 	if group == "prompt" || group == "trace" {
 		order = "max(timestamp) DESC"
+		having = " HAVING count(*) FILTER(WHERE event_type='prompt.created') > 0"
 	}
-	rows, err := a.db.Query(r.Context(), `SELECT coalesce(`+expr+`,'unknown'),`+aggregateSQL+` FROM events WHERE `+where+` GROUP BY 1 ORDER BY `+order+` LIMIT 100`, args...)
+	rows, err := a.db.Query(r.Context(), `SELECT coalesce(`+expr+`,'unknown'),`+aggregateSQL+` FROM events WHERE `+where+` GROUP BY 1`+having+` ORDER BY `+order+` LIMIT 100`, args...)
 	if err != nil {
 		fail(w, 500, "STORAGE_ERROR", "Could not group events")
 		return
@@ -291,6 +307,30 @@ func (a *App) analytics(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fail(w, 500, "STORAGE_ERROR", "Could not read costs")
 		return
+	}
+	rows, err = a.db.Query(r.Context(), `SELECT coalesce(`+expr+`,'unknown'),payload->'cost'->>'currency',payload->'cost'->>'type',sum((payload->'cost'->>'amount')::numeric)::text FROM events WHERE `+where+` AND payload ? 'cost' GROUP BY 1,2,3 ORDER BY 1,2,3`, args...)
+	if err != nil {
+		fail(w, 500, "STORAGE_ERROR", "Could not group costs")
+		return
+	}
+	groupedCosts := map[string][]map[string]string{}
+	for rows.Next() {
+		var name, c, t, v string
+		if rows.Scan(&name, &c, &t, &v) != nil {
+			rows.Close()
+			fail(w, 500, "STORAGE_ERROR", "Could not read costs")
+			return
+		}
+		groupedCosts[name] = append(groupedCosts[name], map[string]string{"currency": c, "type": t, "amount": v})
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		fail(w, 500, "STORAGE_ERROR", "Could not read costs")
+		return
+	}
+	for _, item := range breakdown {
+		item["costs"] = groupedCosts[item["name"].(string)]
 	}
 	writeJSON(w, 200, map[string]any{"totals": totals, "costs": costs, "group_by": group, "breakdown": breakdown, "group_limit": 100})
 }

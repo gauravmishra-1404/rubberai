@@ -174,6 +174,38 @@ func TestPostgresEndToEnd(t *testing.T) {
 	if !found {
 		t.Fatal("full collection lost content")
 	}
+
+	// Human submissions define rows; orphan calls never create prompt rows.
+	for _, pid := range []string{"prompt_2", "prompt_3"} {
+		next := prompt
+		next.ID = token("evt_")
+		next.PromptID = pid
+		next.TraceID = pid
+		request(http.DefaultClient, "POST", prefix+"/events", key, next, 200)
+	}
+	orphan := e
+	orphan.ID = token("evt_")
+	orphan.PromptID = "internal_only"
+	request(http.DefaultClient, "POST", prefix+"/events", key, orphan, 200)
+	grouped := request(owner, "GET", path+"/analytics?group_by=prompt&user_prompts=true", "", nil, 200)
+	groups := grouped["breakdown"].([]any)
+	if len(groups) != 3 {
+		t.Fatalf("want 3 user prompts: %v", grouped)
+	}
+	for _, raw := range groups {
+		row := raw.(map[string]any)
+		st := row["stats"].(map[string]any)
+		if row["name"] == "prompt_1" {
+			if st["input_tokens"] != float64(100) || st["reported_input_tokens"] != float64(1) || st["requests"] != float64(2) {
+				t.Fatal(st)
+			}
+			if len(row["costs"].([]any)) != 2 {
+				t.Fatal("group costs merged currencies")
+			}
+		} else if st["input_tokens"] != nil {
+			t.Fatal("missing tokens became zero", st)
+		}
+	}
 	request(owner, "DELETE", path+"/keys/"+k["id"].(string), "", nil, 200)
 	request(http.DefaultClient, "POST", prefix+"/events", key, e, 401)
 	request(owner, "POST", prefix+"/auth/logout", "", nil, 200)
