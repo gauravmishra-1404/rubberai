@@ -1087,6 +1087,11 @@
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 1000000000000
+              },
+              "cache_write_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000000
               }
             }
           },

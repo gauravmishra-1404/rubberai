@@ -9,23 +9,23 @@ Read [docs/specification.md](docs/specification.md) and
 public contract is HTTP JSON, and no business logic may depend on a particular
 IDE, agent or source language.
 
-## Build status of these changes — read first
+## Current verification status
 
-**The Go changes in this file have never been compiled.** At the time of writing,
-no Go toolchain was installed on the development machine: `bin/rubberai` was built
-earlier with go1.27.1 and still runs, but the compiler was gone by the time these
-edits were made, so `make build` could not run.
+Codex built the current source with Go 1.27.1 and the installed frontend lockfile.
+Frontend checks, Go unit/integration tests with race detection, and Go vet passed.
+PostgreSQL tests use a separate temporary database, never the local application DB.
 
-Consequences:
+The dashboard now defaults to recorded user prompts with separate input/output/cache
+columns. A prompt detail includes cache writes, reasoning and total, with partial
+coverage labels. Raw activity remains expandable. Prompt-scoped summaries exclude
+orphan calls. No historical rows were modified: earlier attribution/token mistakes
+remain in previously stored events and cannot be treated as repaired measurements.
 
-- The running server still serves the **old** aggregate and the **old** `group_by`
-  set. The dashboard changes are inert against it — selecting the new grouping
-  returns `INVALID_GROUP` until the binary is rebuilt.
-- `internal/platform/ingest.go` and `web/src/App.svelte` have not been vetted by
-  `go vet`, `npm run check`, or any test.
-
-Before trusting any of it: `make build && make check`, then
-`TEST_DATABASE_URL=... make test`.
+The adapter starts at EOF when state is absent and retains prompt byte boundaries
+across retries. It normalizes Anthropic input including cache reads/writes, preserves
+reported zeros, and retries pending prompt submissions. This boundary approach is
+for sequential turns in one transcript; it does not reconstruct a subagent tree or
+prove causality for late asynchronous records crossing turn boundaries.
 
 ## 1. Claude Code adapter (new, working)
 
@@ -43,22 +43,22 @@ Three things about it are non-obvious and worth not rediscovering the hard way:
   session transcript (JSONL). The adapter tails that file from a stored byte
   offset under `~/.local/state/rubberai/claude-code/`, and advances the offset
   only after the server accepts the batch, so a failed send retries rather than
-  disappearing. Event IDs derive from the transcript message UUID, which is what
+  disappearing. Event IDs derive from the provider message ID (falling back to transcript UUID), which is what
   makes that retry safe.
-- **If you ever clear the events table, clear those offsets too.** An offset
-  pointing at end-of-file while the rows are gone means that session's usage is
-  skipped permanently — the offset says "already sent" and nothing re-reads it.
+- **Do not clear transcript offsets to replay history after a dashboard reset.**
+  The updated adapter starts at the current file position when state is missing.
+  Prompt boundaries preserve the original association when delivery is retried.
 - **Claude Code writes its own local notices into the transcript** as assistant
   records with model `<synthetic>` and all-zero usage ("No response requested.",
   "API Error: ..."). No request ever reached a provider. The adapter skips them,
-  plus any zero-token message; without that filter they inflate the request count
+  while preserving real zero-token measurements; without that filter they inflate the request count
   with calls that never happened (76 of them across one project's history).
 
 Subagent turns (`isSidechain`) are labelled `agent.type: subagent` rather than
 dropped. They are real billable usage, so hiding them would make cost totals
 wrong; labelling lets the dashboard separate user-driven work from the agent's own.
 
-## 2. Turn-shaped analytics (new, unbuilt)
+## 2. Turn-shaped analytics (original change, now built)
 
 `group_by` accepted `user`, `agent`, `model`, `ide`, `language` and `day` — none
 of which answer "what did *I* ask for, and what did it cost". One typed prompt
@@ -80,9 +80,8 @@ dominated by the agentic loop rather than by the user's own turns.
   numeric columns stay aligned, with a narrower cap under the existing 600px
   breakpoint.
 
-Still missing after this: per-group **cost** (the aggregate has no cost field, so
-cost by user/model/day needs one filtered query per group), and a dedicated
-prompt-detail page. Both are called for by the specification.
+The current implementation adds per-group cost and a structured prompt detail.
+The earlier notes above describe the original change, not its final validation state.
 
 ## Conventions worth keeping
 

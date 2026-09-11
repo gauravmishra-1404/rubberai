@@ -111,3 +111,19 @@ The collector offers `/api/v1/events` and `/api/v1/status` on localhost:4319 wit
 its own token. SDK `Client.emit()` queues without network I/O and returns False
 when the bounded queue is full. SDK shutdown is best effort; use the collector
 for durable storage after its 202 acknowledgement.
+
+### Prompt view and token breakdown
+
+`GET /projects/{id}/analytics?group_by=prompt&user_prompts=true` returns one
+group per recorded `prompt.created` submission, with linked calls aggregated.
+Internal requests alone never create prompt rows. Filters select matching prompt
+groups; the summary includes their linked activity. Raw events remain available.
+Adapters must reserve `prompt.created` for human submissions and keep uncertain
+activity unassigned. Existing incorrect associations are not rewritten.
+
+Usage optionally accepts `cache_write_tokens` alongside `cached_tokens` (cache
+reads). Cache categories are subsets of normalized input; reasoning is a subset
+of output. Providers with exclusive cache counts must normalize input or provide
+an explicit total. Missing categories aggregate to null, with `reported_*` counts
+showing coverage. A zero is a reported zero. Never add subsets to total again.
+Prompt breakdown rows include exact costs grouped by currency and actual/estimated.

@@ -62,3 +62,16 @@ content snapshots and richer user/session management remain future work. Existin
 events are immutable; changing privacy settings does not erase past stored data.
 External user identities and attribution evidence are integration assertions.
 See README and architecture.md for the current operational bounds.
+
+## User-prompt view and token breakdown (2026-09-11)
+
+Validated with Go 1.27.1, `go test -race -p 1 ./...` against isolated PostgreSQL,
+`go vet ./...`, seven adapter unittest cases, Svelte checks and Vite build.
+Desktop and 390px Playwright tests passed: three user submissions produce three
+rows despite an orphan internal request; prompt details show input/output/cache
+and missing data; privacy, key revocation, and page overflow checks pass.
+Screenshots reviewed at both widths. Tests never cleared the application database.
+Historical attribution/token rows are preserved, not retroactively repaired.
+
+Response-fragment regression: multiple transcript records for one provider message
+produce one usage event using the latest snapshot within the flush.
