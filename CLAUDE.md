@@ -119,6 +119,30 @@ But a request that reports them with no rate configured is refused rather than
 estimated without them — a total that silently omits a priced component looks
 identical to a correct one.
 
+## 5. File changes come from git, not tool arguments (new)
+
+The adapter recorded a file change only when `Write`, `Edit` or `NotebookEdit`
+ran. Most work here is done through the shell — heredocs, `sed`, a build — and
+every one of those was invisible. One real turn edited seven files and recorded
+zero.
+
+`worktree_state()` now asks `git diff --numstat HEAD` plus `ls-files --others`
+after each tool call, so a change is caught however it was written, and
+gitignored paths fall out for free.
+
+Three details that matter if you touch it:
+
+- **The baseline is taken at `UserPromptSubmit`**, not at the first tool call. A
+  tree that was already dirty is not work the prompt did.
+- **Counts are deltas between checks**, so a row reads as what that step did
+  rather than everything since the last commit.
+- **Snapshot values are lists, not tuples.** The state is persisted as JSON, and
+  a tuple comes back as a list and compares unequal, which reports every file as
+  changed on the next call.
+
+Untracked files get line counts but no diff, since `git diff HEAD -- <path>`
+shows nothing for a file git does not yet know.
+
 ## Conventions worth keeping
 
 - Validate **before** applying privacy. `Validate()` downgrades an unevidenced

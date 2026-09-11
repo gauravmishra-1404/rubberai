@@ -69,8 +69,18 @@ source code, so it is sent only when `send_diffs` is true in the configuration �
 and the server still discards it unless the project stores diffs and is not
 collecting metadata only. Both gates must be open for a diff to be kept.
 
-Changes are derived from the tool call itself, which carries the exact strings
-replaced, rather than by re-reading the file: the hook runs after the edit, so
+Inside a git repository, changes come from git rather than from tool arguments.
+Asking `git diff --numstat HEAD` after each tool call catches every edit however
+it was made — a shell heredoc, `sed`, a formatter, a build — where inspecting the
+arguments of `Write` and `Edit` sees only those two tools and misses everything
+done through the shell. Gitignored paths are excluded for free. Each turn's
+baseline is taken when the prompt is submitted, so a tree that was already dirty
+is not credited to that prompt, and untracked files are reported as created while
+tracked ones are modified.
+
+Outside a git repository the adapter falls back to tool arguments, where changes
+are derived from the tool call itself, which carries the exact strings replaced,
+rather than by re-reading the file: the hook runs after the edit, so
 re-reading would race with whatever the agent does next. Line counts come from the
 diff opcodes, not the sizes of the replaced strings, because those strings include
 surrounding context and would overstate the change. A whole-file `Write` reports

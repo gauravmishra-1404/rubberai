@@ -21,6 +21,7 @@ RUBBERAI_CLAUDE_CONFIG); see README.md in this directory.
 
 import difflib
 import hashlib
+import subprocess
 import json
 import os
 import sys
@@ -229,6 +230,96 @@ def describe_change(tool_name: str, tool_input: dict, send_diffs: bool) -> dict:
     return change
 
 
+def git(cwd: str, *args, timeout: int = 5):
+    """Run a read-only git command in cwd. Returns None outside a repository."""
+    try:
+        done = subprocess.run(
+            ("git", "-C", cwd, *args),
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def worktree_state(cwd: str):
+    """Line counts per path for everything differing from HEAD, plus untracked files.
+
+    Tool inputs only describe edits made through an edit tool. Most real work also
+    changes files through the shell - sed, a heredoc, a formatter, a build - and
+    those are invisible to a hook that inspects tool arguments. Asking git instead
+    catches every one of them regardless of how the file was written, and gets
+    gitignored paths excluded for free.
+
+    Values are [added, removed, untracked] lists rather than tuples, because this
+    is persisted as JSON and would otherwise compare unequal after a round trip.
+    """
+    numstat = git(cwd, "diff", "--numstat", "HEAD")
+    if numstat is None:
+        return None
+    state = {}
+    for line in numstat.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 3:
+            added, removed, path = parts
+            # Binary files report "-"; record them as changed with no line counts.
+            state[path] = [int(added) if added.isdigit() else 0,
+                           int(removed) if removed.isdigit() else 0, False]
+    untracked = git(cwd, "ls-files", "--others", "--exclude-standard")
+    for path in (untracked or "").splitlines():
+        if not path:
+            continue
+        try:
+            with open(os.path.join(cwd, path), "rb") as handle:
+                state[path] = [handle.read().count(b"\n") + 1, 0, True]
+        except OSError:
+            state[path] = [0, 0, True]
+    return state
+
+
+def worktree_changes(cwd: str, state: dict, send_diffs: bool):
+    """Files changed since the last check, with the line delta for each."""
+    current = worktree_state(cwd)
+    if current is None:
+        return None, None
+    if "worktree" not in state:
+        # First observation: record the baseline without reporting it. A tree that
+        # was already dirty is not work this prompt did.
+        return [], current
+    previous = state["worktree"]
+    changes = []
+    for path, entry in current.items():
+        added, removed, untracked = entry
+        was = previous.get(path) or [0, 0, untracked]
+        if [added, removed] == [was[0], was[1]]:
+            continue
+        change = {
+            "path": path,
+            # Untracked means the file did not exist in the repository before, so
+            # it is a creation. A tracked file with new lines is a modification,
+            # however it was written.
+            "operation": "created" if untracked else "modified",
+            "change_source": "AI",
+            "evidence": AGENT_NAME + ":worktree",
+            # The delta since the previous check, so a row reads as what this step
+            # did rather than everything accumulated since the last commit.
+            "lines_added": max(added - was[0], 0),
+            "lines_removed": max(removed - was[1], 0),
+        }
+        if send_diffs:
+            diff = git(cwd, "diff", "--unified=2", "HEAD", "--", path)
+            if diff:
+                change["diff"] = diff[:DIFF_LIMIT]
+        changes.append(change)
+    for path in previous:
+        if path not in current:
+            changes.append({
+                "path": path, "operation": "deleted", "change_source": "AI",
+                "evidence": AGENT_NAME + ":worktree",
+            })
+    return changes, current
+
+
 def language_for(path: str):
     return LANGUAGE_BY_SUFFIX.get(os.path.splitext(path or "")[1].lower())
 
@@ -364,6 +455,9 @@ def handle(config: dict, project: dict, payload: dict, event_name: str) -> None:
             path = payload.get("transcript_path")
             state = {"offset": os.path.getsize(path) if path and os.path.exists(path) else 0,
                      "boundaries": []}
+        baseline = worktree_state(payload.get("cwd") or os.getcwd())
+        if baseline is not None:
+            state["worktree"] = baseline
         write_state(session_id, state)
         event = base_event(
             config, project, payload, "session.started", "evt_sess_" + (session_id or uuid.uuid4().hex)
@@ -382,6 +476,11 @@ def handle(config: dict, project: dict, payload: dict, event_name: str) -> None:
         prompt_id = "pmt_" + uuid.uuid4().hex
         state.setdefault("boundaries", []).append({"offset": boundary_offset, "prompt_id": prompt_id})
         state["prompt_id"] = prompt_id
+        # Measure this turn's file changes from the moment the user asked, so
+        # anything already uncommitted is not credited to this prompt.
+        baseline = worktree_state(payload.get("cwd") or os.getcwd())
+        if baseline is not None:
+            state["worktree"] = baseline
         write_state(session_id, state)
         event = base_event(
             config, project, payload, "prompt.created", "evt_prompt_" + prompt_id
@@ -415,22 +514,36 @@ def handle(config: dict, project: dict, payload: dict, event_name: str) -> None:
         event["status"] = "failure" if failed else "success"
         events = [attach_turn(event, state)]
 
-        operation = FILE_WRITE_TOOLS.get(tool_name)
-        file_path = tool_input.get("file_path") or tool_input.get("notebook_path")
-        if operation and file_path and not failed:
+        # Ask git what actually changed. This covers every tool - a shell edit, a
+        # formatter, a build - not just the edit tools, and it is what the tool
+        # argument inspection below cannot see. Tool inputs remain the fallback
+        # outside a git repository.
+        changes, snapshot = worktree_changes(
+            payload.get("cwd") or os.getcwd(), state, bool(config.get("send_diffs"))
+        )
+        if changes is None:
+            operation = FILE_WRITE_TOOLS.get(tool_name)
+            file_path = tool_input.get("file_path") or tool_input.get("notebook_path")
+            if operation and file_path and not failed:
+                changes = [dict(
+                    {"path": file_path, "operation": operation, "change_source": "AI",
+                     "evidence": AGENT_NAME + ":" + tool_name},
+                    **describe_change(tool_name, tool_input, bool(config.get("send_diffs"))),
+                )]
+            else:
+                changes = []
+        else:
+            state["worktree"] = snapshot
+            write_state(payload.get("session_id") or "", state)
+
+        for change in changes:
             file_event = base_event(
-                config, project, payload, "file." + operation, "evt_file_" + uuid.uuid4().hex
+                config, project, payload,
+                "file." + (change.get("operation") or "modified"),
+                "evt_file_" + uuid.uuid4().hex,
             )
-            file_event["file"] = {
-                "path": file_path,
-                "operation": operation,
-                "change_source": "AI",
-                "evidence": AGENT_NAME + ":" + tool_name,
-            }
-            file_event["file"].update(
-                describe_change(tool_name, tool_input, bool(config.get("send_diffs")))
-            )
-            language = language_for(file_path)
+            file_event["file"] = change
+            language = language_for(change["path"])
             if language:
                 file_event["language"] = language
                 file_event["file"]["language"] = language
