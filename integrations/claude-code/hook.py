@@ -24,6 +24,7 @@ import hashlib
 import subprocess
 import json
 import os
+import socket
 import sys
 import urllib.error
 import urllib.request
@@ -160,17 +161,29 @@ def send(config: dict, project: dict, events: list) -> bool:
 
 
 def base_event(config: dict, project: dict, payload: dict, event_type: str, event_id: str) -> dict:
+    who = identity(payload.get("cwd") or os.getcwd())
     event = {
         "event_id": event_id,
         "event_type": event_type,
         "project_id": project["project_id"],
         "timestamp": now(),
         "agent": {"name": AGENT_NAME},
-        "user_id": config.get("user_id") or os.environ.get("USER") or "unknown",
+        # Git identity is the name a developer already signs work with, so it
+        # identifies a person across machines where a local account name does not.
+        "user_id": (config.get("user_id") or who.get("email")
+                    or os.environ.get("USER") or "unknown"),
     }
     session_id = payload.get("session_id")
     if session_id:
         event["session_id"] = session_id
+    if config.get("send_identity") and who:
+        # Host and address are personal data, so they travel as metadata, which
+        # the server discards unless the project collects in FULL mode. Identity
+        # is therefore opt-in twice over, like diffs.
+        # Plain values: the event is JSON-encoded once on the way out, and
+        # pre-encoding here would store each value as a quoted string of a
+        # string.
+        event["metadata"] = dict(who)
     entrypoint = os.environ.get("CLAUDE_CODE_ENTRYPOINT")
     if entrypoint:
         event["ide"] = {"name": IDE_BY_ENTRYPOINT.get(entrypoint, entrypoint)}
@@ -318,6 +331,44 @@ def worktree_changes(cwd: str, state: dict, send_diffs: bool):
                 "evidence": AGENT_NAME + ":worktree",
             })
     return changes, current
+
+
+_identity_cache = {}
+
+
+def identity(cwd: str) -> dict:
+    """Who and where, for attributing a prompt to a person and a machine.
+
+    The email comes from git rather than the operating system account, because
+    git config is the identity a developer has already chosen to sign their work
+    with, and the specification lists Git identity as a supported user identity.
+    Nothing is looked up over the network: the address is read from the local
+    routing table, so no request leaves the machine to discover it.
+    """
+    if cwd in _identity_cache:
+        return _identity_cache[cwd]
+    who = {}
+    email = (git(cwd, "config", "user.email") or "").strip()
+    if email:
+        who["email"] = email
+    try:
+        who["host"] = socket.gethostname()
+    except OSError:
+        pass
+    try:
+        # Connecting a UDP socket sends no packets; it only asks the kernel which
+        # local address would reach that destination, which picks the real egress
+        # interface rather than a docker bridge or loopback.
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(("192.0.2.1", 9))   # TEST-NET-1, never routed
+            who["ip"] = probe.getsockname()[0]
+        finally:
+            probe.close()
+    except OSError:
+        pass
+    _identity_cache[cwd] = who
+    return who
 
 
 def language_for(path: str):

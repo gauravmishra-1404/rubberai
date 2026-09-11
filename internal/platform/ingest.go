@@ -226,7 +226,9 @@ const aggregateSQL = `jsonb_build_object(
  'models',jsonb_agg(DISTINCT payload->'model'->>'name') FILTER(WHERE event_type='llm.request.completed' AND payload->'model'->>'name' IS NOT NULL),
  'prompt_user',max(user_id) FILTER(WHERE event_type='prompt.created'),
  'prompt_ide',max(payload->'ide'->>'name') FILTER(WHERE event_type='prompt.created'),
- 'prompt_agent',max(payload->'agent'->>'name') FILTER(WHERE event_type='prompt.created')
+ 'prompt_agent',max(payload->'agent'->>'name') FILTER(WHERE event_type='prompt.created'),
+ 'prompt_host',max(payload->'metadata'->>'host') FILTER(WHERE event_type='prompt.created'),
+ 'prompt_ip',max(payload->'metadata'->>'ip') FILTER(WHERE event_type='prompt.created')
  )`
 
 func (a *App) analytics(w http.ResponseWriter, r *http.Request) {

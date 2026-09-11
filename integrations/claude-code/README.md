@@ -89,6 +89,27 @@ every line as added, since no prior content reaches the hook.
 Diffs are truncated at 40,000 characters so one large edit cannot push a batch past
 the server's 1 MiB body limit.
 
+## Identity
+
+With `send_identity` enabled, each event carries the developer's git email,
+hostname and local IP address. The email comes from `git config user.email` —
+the identity a developer already signs work with, and one the specification lists
+as a supported user identity — rather than the operating system account, which
+does not identify a person across machines.
+
+The address is read from the local routing table by asking the kernel which
+interface would reach an unrouted test address. No packet is sent and no lookup
+leaves the machine, so enabling this contacts no third party. It is the machine's
+LAN address, not its public one.
+
+Host and IP travel in `metadata`, which the server discards unless the project
+collects in FULL mode — identity is opt-in twice, like diffs.
+
+`user_id` is the exception. It is a correlation identifier rather than content, so
+privacy modes do not strip it, and when it resolves to the git email that email is
+stored whatever the project's privacy setting. Set `user_id` explicitly in the
+configuration to record something less identifying.
+
 ## Events
 
 | Hook | Events |
