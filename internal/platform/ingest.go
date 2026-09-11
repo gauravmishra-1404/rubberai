@@ -203,6 +203,12 @@ const aggregateSQL = `jsonb_build_object(
  'users',count(DISTINCT NULLIF(user_id,'')),
  'files_changed',count(DISTINCT payload->'file'->>'path') FILTER(WHERE event_type IN ('file.created','file.modified','file.deleted','file.renamed')),
  'files',(SELECT jsonb_agg(DISTINCT payload->'file'->>'path') FILTER(WHERE event_type IN ('file.created','file.modified','file.deleted','file.renamed'))),
+ 'file_changes',(SELECT jsonb_agg(jsonb_build_object(
+     'path',payload->'file'->>'path','status',payload->'file'->>'status',
+     'operation',payload->'file'->>'operation',
+     'lines_added',payload->'file'->>'lines_added','lines_removed',payload->'file'->>'lines_removed',
+     'diff',left(payload->'file'->>'diff',4000)) ORDER BY timestamp)
+   FILTER(WHERE event_type IN ('file.created','file.modified','file.deleted','file.renamed'))),
  'lines_added',coalesce(sum((payload->'file'->>'lines_added')::numeric),0),
  'lines_removed',coalesce(sum((payload->'file'->>'lines_removed')::numeric),0),
  'input_tokens',sum((payload->'usage'->>'input_tokens')::numeric),

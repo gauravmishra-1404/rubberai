@@ -182,3 +182,56 @@ pre.diff .hunk { color: var(--hunk); display: block; }
   text-underline-offset: 3px;
   cursor: help;
 }
+
+/* File panel. Positioned against the viewport because the table it belongs to
+   scrolls, and an absolutely positioned child would be clipped by that box.
+   Pointer events are off so moving toward it never traps the cursor: the panel
+   is for reading, and each row carries its own diff as a title. */
+.filecell { cursor: help; }
+.filepop {
+  position: fixed;
+  z-index: 40;
+  width: min(340px, calc(100vw - 24px));
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+  padding: 8px 0;
+  pointer-events: none;
+  font-size: 11px;
+}
+.filepop-head, .filepop-foot {
+  padding: 4px 12px;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: .04em;
+}
+.filepop-foot { border-top: 1px solid var(--line); margin-top: 5px; padding-top: 7px; }
+.filerow {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 12px;
+}
+.fstatus {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--badge-ink);
+  background: var(--badge-bg);
+  border: 1px solid var(--badge-line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.fstatus.untracked { color: var(--caption); background: transparent; }
+.fpath {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;            /* keep the filename visible when the path is long */
+  text-align: left;
+}
+.fdelta { font-size: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
