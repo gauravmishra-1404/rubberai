@@ -287,3 +287,7 @@ td.summary { width: 1%; white-space: nowrap; vertical-align: top; }
   color: var(--muted);
   margin-left: 6px;
 }
+
+/* Explains why a field just disappeared. Sits under the username it refers to,
+   so the reason is where the change happened. */
+.note { margin: -8px 0 0; }

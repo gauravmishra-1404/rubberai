@@ -344,7 +344,13 @@ func (a *App) register(w http.ResponseWriter, r *http.Request) {
 		_, err = tx.Exec(r.Context(), `INSERT INTO users(id,organization_id,username,display_name,password_hash,email,email_domain_checked_at) VALUES($1,$2,$3,$4,$5,NULLIF($6,''),$7)`, u.ID, u.OrganizationID, b.Username, b.DisplayName, hash, email, nullTime(checkedAt))
 	}
 	if err != nil {
-		fail(w, 409, "REGISTRATION_FAILED", "Could not register; username may already exist")
+		// Two unique constraints can fail here now. Saying "username" for both
+		// sends the user to correct a field that was never the problem.
+		message := "Could not register; username may already exist"
+		if strings.Contains(err.Error(), "users_email_unique") {
+			message = "That email address is already registered"
+		}
+		fail(w, 409, "REGISTRATION_FAILED", message)
 		return
 	}
 	if tx.Commit(r.Context()) != nil {

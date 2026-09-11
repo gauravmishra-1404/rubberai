@@ -50,6 +50,10 @@
  function closeChanges(){changeSet=null;changeFile=null;textSheet=null}
   let detail:Activity|null=$state(null),hasMore=$state(false),offset=$state(0),privacy=$state('METADATA_ONLY'),trackDiffs=$state(false);
  const project=$derived(projects.find(p=>p.id===selected));
+ // People sign up with their email as their username. Asking for both then makes
+ // the second field pure retyping, so it only appears when it would add something.
+ const usernameIsEmail=$derived(/^[^\s@]+@[^\s@.]+\.[^\s@]+$/.test(username.trim()));
+ const contactEmail=$derived(usernameIsEmail?username.trim():email);
  const tokenFields=[['input_tokens','Input'],['output_tokens','Output'],['cached_tokens','Cache read'],['cache_write_tokens','Cache write'],['reasoning_tokens','Reasoning'],['total_tokens','Total']];
  const tokens=(s:Stats,key:string)=>s[key]==null?'Not reported':number(Number(s[key]))+(Number(s['reported_'+key])<s.requests?' (partial)':'');
  const number=(v:number|null|undefined)=>new Intl.NumberFormat().format(v??0);
@@ -73,8 +77,8 @@
  <main class="welcome"><section class="pitch"><a class="brand" href="/">rubber<span>ai</span><i></i></a><div class="eyebrow">DEVELOPER OBSERVABILITY</div><h1>Every AI action.<br/>One clear picture.</h1><p>Connect prompts, tools, tokens and code changes. Understand what happened, without guessing who did it.</p><div class="principles"><span>Any agent</span><span>Any language</span><span>Privacy first</span></div></section>
  <section class="auth card"><div class="eyebrow">YOUR WORKSPACE</div><h2>{register?'Start with an organization':'Welcome back'}</h2><p class="muted">{register?'Create your account. No email address required.':'Sign in to explore your development activity.'}</p>
  <form onsubmit={e=>{e.preventDefault();authenticate()}}>
- {#if register}<label>Organization<input bind:value={organization} maxlength="120" required placeholder="Acme engineering"/></label><label>Your name<input bind:value={displayName} maxlength="120" required placeholder="Display name" autocomplete="name"/></label><label><span>Email <span class="optional">optional</span></span><input type="email" bind:value={email} maxlength="254" placeholder="you@example.com" autocomplete="email"/></label>{/if}
- <label>Username<input bind:value={username} required autocomplete="username" maxlength="160"/></label><label>Password<input type="password" bind:value={password} required minlength={register?12:1} maxlength="256" autocomplete={register?'new-password':'current-password'}/></label>
+ {#if register}<label>Organization<input bind:value={organization} maxlength="120" required placeholder="Acme engineering"/></label><label>Your name<input bind:value={displayName} maxlength="120" required placeholder="Display name" autocomplete="name"/></label>{#if !usernameIsEmail}<label><span>Email <span class="optional">optional</span></span><input type="email" bind:value={email} maxlength="254" placeholder="you@example.com" autocomplete="email"/></label>{/if}{/if}
+ <label>Username<input bind:value={username} required autocomplete="username" maxlength="160"/></label>{#if register&&usernameIsEmail}<p class="caption note">That is an email address, so it will be used for contact too. No need to enter it twice.</p>{/if}<label>Password<input type="password" bind:value={password} required minlength={register?12:1} maxlength="256" autocomplete={register?'new-password':'current-password'}/></label>
  {#if error}<p role="alert" class="error">{error}</p>{/if}<button class="primary" disabled={busy}>{busy?'Working…':register?'Create workspace →':'Sign in →'}</button></form>
  <button class="text-button" onclick={()=>{register=!register;error=''}}>{register?'Already have an account? Sign in':'Create an organization'}</button></section></main>
 {:else}
