@@ -25,7 +25,12 @@ func TestDurableRetryAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest("POST", "/api/v1/events", strings.NewReader(`{"event_id":"evt_1"}`))
+	// The collector validates before buffering, so a partial event is rejected
+	// outright; this test is about durable retry, not validation.
+	req := httptest.NewRequest("POST", "/api/v1/events", strings.NewReader(
+		`{"event_id":"evt_1","event_type":"session.started",`+
+			`"project_id":"prj_retry","timestamp":"2026-01-01T00:00:00Z"}`))
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+secret)
 	w := httptest.NewRecorder()
 	c.Handler().ServeHTTP(w, req)
@@ -66,7 +71,13 @@ func TestCollectorAuthAndCapacity(t *testing.T) {
 	}
 	for _, authorized := range []bool{false, true} {
 		c.MaxBytes = 1
-		req := httptest.NewRequest("POST", "/api/v1/events", strings.NewReader(`{}`))
+		// A valid event: the collector now rejects a malformed body before it
+		// reaches the capacity check, so an empty object would return 400 and
+		// never exercise the full-outbox path this test is about.
+		req := httptest.NewRequest("POST", "/api/v1/events", strings.NewReader(
+			`{"event_id":"evt_capacity","event_type":"session.started",`+
+				`"project_id":"prj_capacity","timestamp":"2026-01-01T00:00:00Z"}`))
+		req.Header.Set("Content-Type", "application/json")
 		if authorized {
 			req.Header.Set("Authorization", "Bearer "+c.LocalToken)
 		}
