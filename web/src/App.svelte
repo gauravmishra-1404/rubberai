@@ -12,15 +12,32 @@
  let analytics:Analytics|null=$state(null),events:Activity[]=$state([]),keys:Key[]=$state([]),issuedKey=$state(''),keyName=$state('Local development');
  let group=$state('prompt'),userFilter=$state(''),agentFilter=$state(''),modelFilter=$state(''),traceFilter=$state(''),promptFilter=$state(''),languageFilter=$state(''),ideFilter=$state(''),sessionFilter=$state(''),repositoryFilter=$state(''),branchFilter=$state(''),eventFilter=$state('');
  let from=$state(new Date(Date.now()-30*86400000).toISOString().slice(0,10)),to=$state(new Date().toISOString().slice(0,10));
- let filePop:{x:number;y:number;rows:FileChange[]}|null=$state(null);
- function showFiles(event:MouseEvent,rows:FileChange[]|null){
-  if(!rows||!rows.length){filePop=null;return}
-  // The table scrolls, so an absolutely positioned panel would be clipped by
-  // its container. Position against the viewport instead, from the cell's rect.
-  const r=(event.currentTarget as HTMLElement).getBoundingClientRect();
-  filePop={x:Math.min(r.left,window.innerWidth-360),y:r.bottom+6,rows};
+ let changeSet:{label:string;rows:FileChange[]}|null=$state(null),changeFile:FileChange|null=$state(null);
+ function mergeChanges(rows:FileChange[]):FileChange[]{
+  // One event is recorded per change, so a file edited twice in a turn arrives
+  // twice. Merge by path: the totals add up, and the latest status and diff win,
+  // which is what "what did this turn do to this file" means.
+  const byPath=new Map<string,FileChange>();
+  for(const r of rows){
+   const seen=byPath.get(r.path);
+   if(!seen){byPath.set(r.path,{...r});continue}
+   seen.lines_added=String(Number(seen.lines_added||0)+Number(r.lines_added||0));
+   seen.lines_removed=String(Number(seen.lines_removed||0)+Number(r.lines_removed||0));
+   seen.status=r.status??seen.status;
+   seen.operation=r.operation??seen.operation;
+   seen.diff=r.diff??seen.diff;
+  }
+  return [...byPath.values()];
  }
- let detail:Activity|null=$state(null),hasMore=$state(false),offset=$state(0),privacy=$state('METADATA_ONLY'),trackDiffs=$state(false);
+ function openChanges(label:string,rows:FileChange[]|null){
+  if(!rows||!rows.length)return;
+  const merged=mergeChanges(rows);
+  // Open on the first file rather than an empty pane, so the panel shows what it
+  // is for the moment it appears.
+  changeSet={label,rows:merged};changeFile=merged[0];
+ }
+ function closeChanges(){changeSet=null;changeFile=null}
+  let detail:Activity|null=$state(null),hasMore=$state(false),offset=$state(0),privacy=$state('METADATA_ONLY'),trackDiffs=$state(false);
  const project=$derived(projects.find(p=>p.id===selected));
  const tokenFields=[['input_tokens','Input'],['output_tokens','Output'],['cached_tokens','Cache read'],['cache_write_tokens','Cache write'],['reasoning_tokens','Reasoning'],['total_tokens','Total']];
  const tokens=(s:Stats,key:string)=>s[key]==null?'Not reported':number(Number(s[key]))+(Number(s['reported_'+key])<s.requests?' (partial)':'');
@@ -38,6 +55,7 @@
  onMount(()=>{(async()=>{try{me=await api('/me');await loadProjects()}catch(e){if(me)error=e instanceof Error?e.message:'Could not load projects'}finally{ready=true}})()});
 </script>
 
+<svelte:window onkeydown={e=>{if(e.key==='Escape')closeChanges()}}/>
 <svelte:head><meta name="description" content="Understand AI coding activity across your projects, tools and models."/></svelte:head>
 {#if !ready}<main class="loading">Loading rubberai…</main>
 {:else if !me}
@@ -58,7 +76,7 @@
  <form class="filters card" onsubmit={e=>{e.preventDefault();detail=null;action(refresh)}}><label>From (UTC)<input type="date" bind:value={from} required/></label><label>To (UTC)<input type="date" bind:value={to} required/></label><label>User<input bind:value={userFilter} placeholder="Any user ID"/></label><label>Agent<input bind:value={agentFilter} placeholder="Any agent"/></label><label>Model<input bind:value={modelFilter} placeholder="Any model"/></label><button class="primary" disabled={busy}>{busy?'Loading…':'Apply filters'}</button><details class="advanced"><summary>More filters</summary><div class="filters"><label>IDE<input bind:value={ideFilter}/></label><label>Language<input bind:value={languageFilter}/></label><label>Repository<input bind:value={repositoryFilter}/></label><label>Branch<input bind:value={branchFilter}/></label><label>Event type<input bind:value={eventFilter}/></label><label>Session ID<input bind:value={sessionFilter}/></label><label>Trace ID<input bind:value={traceFilter}/></label><label>Prompt ID<input bind:value={promptFilter}/></label></div></details></form>
  {#if traceFilter||promptFilter}<div class="focus-banner"><span>Inspecting {traceFilter?'trace':'prompt'} <code>{traceFilter||promptFilter}</code></span><button onclick={()=>{traceFilter='';promptFilter='';action(refresh)}}>Clear focus</button></div>{/if}
  {#if analytics}<section class="stats">{#each [['Prompts',analytics.totals.prompts],['Reported total tokens',tokens(analytics.totals,'total_tokens')],['Traces',analytics.totals.traces],['Files changed',analytics.totals.files_changed]] as [label,value]}<article class="card"><span class="muted">{label}</span><strong>{typeof value==='string'?value:number(Number(value))}</strong></article>{/each}</section>
- <div class="two-col"><section class="card"><div class="section-title"><h2>{group==='prompt'?'Your prompts':'Usage breakdown'}</h2><label><span class="sr-only">Group by</span><select bind:value={group} onchange={()=>action(refresh)}>{#each ['prompt','trace','user','agent','model','ide','language','day'] as g}<option value={g}>{g}</option>{/each}</select></label></div><div class="table-scroll"><table><thead><tr><th>{group==='prompt'?'your prompt':group==='trace'?'trace':group}</th><th>Input</th><th>Output</th><th>Cached</th><th>Files</th><th>Cost</th></tr></thead><tbody>{#each analytics.breakdown as b (b.name)}<tr><td>{#if group==='prompt'&&b.name!=='unknown'}<button class="text-button turn" title={b.stats.prompt_text||b.name} onclick={()=>inspectPrompt(b.name)}>{b.stats.prompt_text||'Prompt content not collected'}</button><small><span class="who" class:known={!!(b.stats.prompt_email||b.stats.prompt_ip)} title={[b.stats.prompt_email,b.stats.prompt_ip,b.stats.prompt_host].filter(Boolean).join('\n')||'No identity recorded'}>{String(b.stats.prompt_user||'User unknown')}</span> · {String(b.stats.prompt_ide||'IDE unknown')} · {String(b.stats.prompt_agent||'Agent unknown')}</small>{#if b.stats.models?.length}<span class="badge">{b.stats.models.join(', ')}</span>{/if}{:else if group==='trace'&&b.name!=='unknown'}<button class="text-button turn" onclick={()=>inspectTrace(b.name)}>{b.stats.prompt_text||b.name}</button>{:else if group==='user'&&b.name!=='unknown'}<button class="text-button" onclick={()=>{userFilter=b.name;action(refresh)}}>{b.name}</button>{:else}{b.name}{/if}</td><td>{tokens(b.stats,'input_tokens')}</td><td>{tokens(b.stats,'output_tokens')}</td><td>{tokens(b.stats,'cached_tokens')}</td><td class="filecell" onmouseenter={e=>showFiles(e,b.stats.file_changes)} onmouseleave={()=>filePop=null}>{number(b.stats.files_changed)}{#if b.stats.lines_added||b.stats.lines_removed}<small class="delta"><span class="added">+{number(Number(b.stats.lines_added))}</span> <span class="removed">−{number(Number(b.stats.lines_removed))}</span></small>{/if}</td><td>{#each b.costs||[] as cost}<div>{cost.currency} {cost.amount} <small>{cost.type}</small></div>{:else}Not reported{/each}</td></tr>{:else}<tr><td colspan="6" class="muted">No user prompts recorded in this period.</td></tr>{/each}</tbody></table></div><p class="caption">Up to 100 groups. Prompt rows require a recorded user submission. Partial counts cover only requests reporting that category.</p></section>
+ <div class="two-col"><section class="card"><div class="section-title"><h2>{group==='prompt'?'Your prompts':'Usage breakdown'}</h2><label><span class="sr-only">Group by</span><select bind:value={group} onchange={()=>action(refresh)}>{#each ['prompt','trace','user','agent','model','ide','language','day'] as g}<option value={g}>{g}</option>{/each}</select></label></div><div class="table-scroll"><table><thead><tr><th>{group==='prompt'?'your prompt':group==='trace'?'trace':group}</th><th>Input</th><th>Output</th><th>Cached</th><th>Files</th><th>Cost</th></tr></thead><tbody>{#each analytics.breakdown as b (b.name)}<tr><td>{#if group==='prompt'&&b.name!=='unknown'}<button class="text-button turn" title={b.stats.prompt_text||b.name} onclick={()=>inspectPrompt(b.name)}>{b.stats.prompt_text||'Prompt content not collected'}</button><small><span class="who" class:known={!!(b.stats.prompt_email||b.stats.prompt_ip)} title={[b.stats.prompt_email,b.stats.prompt_ip,b.stats.prompt_host].filter(Boolean).join('\n')||'No identity recorded'}>{String(b.stats.prompt_user||'User unknown')}</span> · {String(b.stats.prompt_ide||'IDE unknown')} · {String(b.stats.prompt_agent||'Agent unknown')}</small>{#if b.stats.models?.length}<span class="badge">{b.stats.models.join(', ')}</span>{/if}{:else if group==='trace'&&b.name!=='unknown'}<button class="text-button turn" onclick={()=>inspectTrace(b.name)}>{b.stats.prompt_text||b.name}</button>{:else if group==='user'&&b.name!=='unknown'}<button class="text-button" onclick={()=>{userFilter=b.name;action(refresh)}}>{b.name}</button>{:else}{b.name}{/if}</td><td>{tokens(b.stats,'input_tokens')}</td><td>{tokens(b.stats,'output_tokens')}</td><td>{tokens(b.stats,'cached_tokens')}</td><td class="filecell">{#if b.stats.file_changes?.length}<button class="text-button filecount" onclick={()=>openChanges(String(b.stats.prompt_text||b.name),b.stats.file_changes)}>{number(b.stats.files_changed)}</button>{:else}{number(b.stats.files_changed)}{/if}{#if b.stats.lines_added||b.stats.lines_removed}<small class="delta"><span class="added">+{number(Number(b.stats.lines_added))}</span> <span class="removed">−{number(Number(b.stats.lines_removed))}</span></small>{/if}</td><td>{#each b.costs||[] as cost}<div>{cost.currency} {cost.amount} <small>{cost.type}</small></div>{:else}Not reported{/each}</td></tr>{:else}<tr><td colspan="6" class="muted">No user prompts recorded in this period.</td></tr>{/each}</tbody></table></div><p class="caption">Up to 100 groups. Prompt rows require a recorded user submission. Partial counts cover only requests reporting that category.</p></section>
  <section class="card"><h2>Recorded cost</h2>{#each analytics.costs as cost}<div class="cost"><strong>{cost.currency} {cost.amount}</strong><span class="badge">{cost.type}</span></div>{:else}<p class="muted">No costs reported. Configure model pricing or send provider charges with events.</p>{/each}<div class="coverage"><span>Usage coverage</span><strong>{analytics.totals.requests_with_total} / {analytics.totals.requests} requests include totals</strong><span>Cost coverage</span><strong>{analytics.totals.requests_with_cost} / {analytics.totals.requests} requests include costs</strong></div><p class="caption">Currencies are kept separate. Usage is not a developer performance score.</p></section></div>{/if}
  {#if promptFilter && analytics}<section class="card prompt-detail"><h2>Your prompt</h2><p class="prompt-content">{analytics.totals.prompt_text||'Prompt content not collected'}</p><p>{String(analytics.totals.prompt_user||'User unknown')} · {String(analytics.totals.prompt_ide||'IDE unknown')} · {String(analytics.totals.prompt_agent||'Agent unknown')}</p><p>Models: {analytics.totals.models?.join(', ')||'Not reported'}</p><div class="table-scroll"><table><thead><tr>{#each tokenFields as [key,label]}<th>{label}</th>{/each}</tr></thead><tbody><tr>{#each tokenFields as [key,label]}<td>{tokens(analytics.totals,key)}</td>{/each}</tr></tbody></table></div><p class="caption">Cache and reasoning categories may be included in input or output. They are not added again to the total. Partial values include only reported usage.</p></section>{/if}
  <details class="internal-activity"><summary>{promptFilter||traceFilter?'Expand internal activity':'Explore raw activity (includes unassigned events)'}</summary>
@@ -73,17 +91,40 @@ Content-Type: application/json
 ${JSON.stringify({event_id:'evt_unique_id',event_type:'prompt.created',project_id:selected,user_id:me.id,session_id:'session_1',trace_id:'trace_1',prompt_id:'prompt_1',timestamp:new Date().toISOString()},null,2)}`}</pre><p class="caption">Keep the same event ID when retrying. The server counts it once.</p></section>
  {:else}<section class="card"><h2>Collection policy</h2><form onsubmit={e=>{e.preventDefault();action(async()=>{await api(`/projects/${selected}`,'PATCH',{privacy,track_diffs:trackDiffs});await loadProjects()})}}><label>Privacy mode<select bind:value={privacy}><option value="METADATA_ONLY">Metadata only — default</option><option value="REDACTED">Redacted prompt text</option><option value="FULL">Full prompt collection</option></select></label><p class="muted">Metadata mode discards prompts, diffs and arbitrary metadata. Redacted mode removes common credential patterns from prompt text; it cannot guarantee removal of every secret.</p><label class="checkbox"><input type="checkbox" bind:checked={trackDiffs}/>Allow diffs in full collection mode</label><p class="caption">Changes apply to new events. Previously stored events retain their original collection policy.</p><button class="primary" disabled={busy}>Save settings</button></form></section>{/if}
  {/if}
- {#if filePop}
-  <div class="filepop" style="left:{filePop.x}px;top:{filePop.y}px">
-   <div class="filepop-head">{filePop.rows.length} file{filePop.rows.length===1?'':'s'} changed</div>
-   {#each filePop.rows as f}
-    <div class="filerow" title={f.diff||'No diff recorded for this change'}>
-     <span class="fstatus" class:untracked={f.status==='untracked'}>{f.status||f.operation||'changed'}</span>
-     <span class="fpath">{f.path}</span>
-     <span class="fdelta"><span class="added">+{f.lines_added||0}</span> <span class="removed">−{f.lines_removed||0}</span></span>
+ {#if changeSet}
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="File changes">
+   <button class="sheet-scrim" aria-label="Close file changes" onclick={closeChanges}></button>
+   <section class="sheet-body">
+    <div class="section-title">
+     <div><h2>Files changed</h2><p class="muted">{changeSet.label}</p></div>
+     <button onclick={closeChanges}>Close</button>
     </div>
-   {/each}
-   <div class="filepop-foot">Hover a file to see what changed</div>
+    <div class="sheet-split">
+     <ul class="filelist">
+      {#each changeSet.rows as f}
+       <li>
+        <button class:sel={changeFile?.path===f.path} onclick={()=>changeFile=f}>
+         <span class="fstatus" class:untracked={f.status==='untracked'}>{f.status||f.operation||'changed'}</span>
+         <span class="fpath">{f.path}</span>
+         <span class="fdelta"><span class="added">+{f.lines_added||0}</span> <span class="removed">−{f.lines_removed||0}</span></span>
+        </button>
+       </li>
+      {/each}
+     </ul>
+     <div class="filediff">
+      {#if changeFile}
+       <h3>{changeFile.path}</h3>
+       <p class="muted">{changeFile.status||changeFile.operation||'changed'} · <span class="added">+{changeFile.lines_added||0}</span> <span class="removed">−{changeFile.lines_removed||0}</span></p>
+       {#if changeFile.diff}
+        <pre class="diff">{#each changeFile.diff.split('\n') as line}<span class={line.startsWith('+')&&!line.startsWith('+++')?'added':line.startsWith('-')&&!line.startsWith('---')?'removed':line.startsWith('@@')?'hunk':''}>{line}
+</span>{/each}</pre>
+       {:else}
+        <p class="muted">No diff stored for this change. Untracked files have no prior version to compare against, and diffs are only kept when the project collects in full mode.</p>
+       {/if}
+      {/if}
+     </div>
+    </div>
+   </section>
   </div>
  {/if}
  <footer>rubberai · Evidence over assumptions.</footer></main></div>

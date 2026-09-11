@@ -183,55 +183,56 @@ pre.diff .hunk { color: var(--hunk); display: block; }
   cursor: help;
 }
 
-/* File panel. Positioned against the viewport because the table it belongs to
-   scrolls, and an absolutely positioned child would be clipped by that box.
-   Pointer events are off so moving toward it never traps the cursor: the panel
-   is for reading, and each row carries its own diff as a title. */
-.filecell { cursor: help; }
-.filepop {
-  position: fixed;
-  z-index: 40;
-  width: min(340px, calc(100vw - 24px));
+/* Changes sheet. A panel rather than a tooltip: a diff is something you read and
+   scroll, which a hover target cannot survive. The list stays beside the diff so
+   moving between files never costs you your place. */
+.filecount { font: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.sheet { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; }
+.sheet-scrim {
+  position: absolute; inset: 0; border: 0; border-radius: 0; padding: 0;
+  background: rgba(0, 0, 0, .55); cursor: default;
+}
+.sheet-body {
+  position: relative;
+  width: min(1000px, 100%);
+  max-height: min(80vh, 780px);
+  display: flex; flex-direction: column;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
-  padding: 8px 0;
-  pointer-events: none;
-  font-size: 11px;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .5);
 }
-.filepop-head, .filepop-foot {
-  padding: 4px 12px;
-  color: var(--muted);
-  font-size: 10px;
-  letter-spacing: .04em;
+.sheet-split { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: 18px; min-height: 0; margin-top: 14px; }
+.filelist { list-style: none; margin: 0; padding: 0; overflow: auto; min-height: 0; display: grid; gap: 2px; align-content: start; }
+.filelist button {
+  width: 100%; text-align: left; border: 1px solid transparent; background: none;
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px;
+  padding: 8px 10px; border-radius: 7px; font-size: 12px;
 }
-.filepop-foot { border-top: 1px solid var(--line); margin-top: 5px; padding-top: 7px; }
-.filerow {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 8px;
-  align-items: baseline;
-  padding: 4px 12px;
-}
+.filelist button:hover { background: var(--btn-hover); }
+.filelist button.sel { background: var(--accent-bg); border-color: var(--accent-line); }
+.filelist .fdelta { grid-column: 2; }
+.filediff { overflow: auto; min-height: 0; }
+.filediff h3 { font-size: 13px; margin: 0 0 4px; word-break: break-all; }
+.filediff .muted { font-size: 12px; }
 .fstatus {
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: .06em;
-  color: var(--badge-ink);
-  background: var(--badge-bg);
-  border: 1px solid var(--badge-line);
-  border-radius: 4px;
-  padding: 1px 5px;
-  white-space: nowrap;
+  font-size: 9px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--badge-ink); background: var(--badge-bg);
+  border: 1px solid var(--badge-line); border-radius: 4px;
+  padding: 1px 5px; white-space: nowrap; align-self: start;
 }
 .fstatus.untracked { color: var(--caption); background: transparent; }
 .fpath {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   direction: rtl;            /* keep the filename visible when the path is long */
   text-align: left;
+}
+@media (max-width: 700px) {
+  .sheet { padding: 10px; }
+  .sheet-body { max-height: 92vh; padding: 15px; }
+  .sheet-split { grid-template-columns: 1fr; }
+  .filelist { max-height: 32vh; }
 }
 .fdelta { font-size: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
