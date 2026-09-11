@@ -139,15 +139,29 @@ should omit sensitive content before it reaches disk when using metadata-only mo
 `PRICING_JSON` supplies explicit per-million token prices, keyed by provider/model:
 
 ```json
-{"example/model":{"input_per_million":"1.0","output_per_million":"2.0","currency":"USD","version":"internal-2026-09"}}
+{"example/model":{"input_per_million":"1.0","output_per_million":"2.0",
+ "cache_read_per_million":"0.1","cache_write_per_million":"2.0",
+ "currency":"USD","version":"internal-2026-09"}}
 ```
 
 These are illustrative rates, not provider prices. Estimates require both input
-and output token counts. Supplied costs take precedence. This initial estimator
-uses one input and one output rate; it does not model cache discounts, tiers or
-other provider billing rules. Supply calculated costs for those pricing schemes.
-Cached and reasoning tokens are reported separately and are never added to totals
-a second time. A partial measurement does not become a complete total.
+and output token counts. Supplied costs take precedence.
+
+`input_tokens` is the whole input side, with cached and cache-write counts as
+subsets of it, so the estimator charges the remainder at the input rate and each
+subset at its own. This matters: a cache read costs a fraction of fresh input and
+a cache write rather more, so pricing the whole input figure at the input rate can
+overstate a cache-heavy request several times over.
+
+The cache rates are optional, because a model that never reports cache tokens
+never needs them. But a request that does report them and has no rate configured
+is left unpriced rather than priced at the input rate — an estimate that silently
+omits a priced component would be wrong in a way nothing on screen reveals. The
+estimator still does not model tiers or other provider billing rules; supply
+calculated costs for those schemes.
+
+Reasoning tokens are a subset of output and are never charged twice. A partial
+measurement does not become a complete total.
 
 ## Verification
 

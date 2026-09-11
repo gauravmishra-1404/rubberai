@@ -76,7 +76,7 @@ func (a *App) ingest(w http.ResponseWriter, r *http.Request) {
 		}
 		if e.Cost == nil && e.Usage != nil {
 			if p, ok := a.prices[e.Model.Provider+"/"+e.Model.Name]; ok {
-				if amount, err := Estimate(*e.Usage, p.Input, p.Output); err == nil {
+				if amount, err := Estimate(*e.Usage, Rates{Input: p.Input, Output: p.Output, CacheRead: p.CacheRead, CacheWrite: p.CacheWrite}); err == nil {
 					e.Cost = &Cost{Amount: amount, Currency: p.Currency, Type: "estimated", PricingVersion: p.Version}
 				}
 			}

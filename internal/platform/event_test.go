@@ -77,12 +77,41 @@ func TestAttributionNeedsEvidence(t *testing.T) {
 }
 func TestCosts(t *testing.T) {
 	u := Usage{Input: count(1000000), Output: count(2000000)}
-	got, err := Estimate(u, "0.1", "0.2")
+	got, err := Estimate(u, Rates{Input: "0.1", Output: "0.2"})
 	if err != nil || got != "0.500000000000" {
 		t.Fatalf("%s %v", got, err)
 	}
-	if _, err = Estimate(Usage{}, "1", "2"); err == nil {
+	if _, err = Estimate(Usage{}, Rates{Input: "1", Output: "2"}); err == nil {
 		t.Fatal("estimated unknown usage")
+	}
+	// input_tokens is the whole input side with the cache counts as subsets, so
+	// pricing charges the remainder at the input rate and each subset at its own:
+	// 1M fresh @1 + 1M output @2 + 2M cache read @0.1 + 1M cache write @1.25.
+	cached := Usage{Input: count(4000000), Output: count(1000000),
+		Cached: count(2000000), CacheWrite: count(1000000)}
+	got, err = Estimate(cached, Rates{Input: "1", Output: "2", CacheRead: "0.1", CacheWrite: "1.25"})
+	if err != nil || got != "4.450000000000" {
+		t.Fatalf("cache-aware estimate: got %s err %v", got, err)
+	}
+	// Charging the cache subsets at the input rate as well would double count
+	// them; the whole-input figure alone must not be what gets billed.
+	if naive, _ := Estimate(Usage{Input: count(4000000), Output: count(1000000)},
+		Rates{Input: "1", Output: "2"}); naive == got {
+		t.Fatal("cache tokens charged at the input rate")
+	}
+	// A priced component with no configured rate must not silently vanish from
+	// the total: refusing is correct, quietly undercharging is not.
+	if _, err = Estimate(cached, Rates{Input: "1", Output: "2"}); err == nil {
+		t.Fatal("estimated cache tokens with no cache rate configured")
+	}
+	// Subsets larger than the input they belong to mean the counts disagree.
+	if _, err = Estimate(Usage{Input: count(10), Output: count(1), Cached: count(99)},
+		Rates{Input: "1", Output: "1", CacheRead: "1"}); err == nil {
+		t.Fatal("accepted cache tokens exceeding input")
+	}
+	// A model that never reports cache tokens still needs no cache rates.
+	if _, err = Estimate(u, Rates{Input: "1", Output: "2"}); err != nil {
+		t.Fatalf("required a cache rate for usage without cache tokens: %v", err)
 	}
 	for _, currency := range []string{"USD", "EUR", "INR"} {
 		e := baseEvent()

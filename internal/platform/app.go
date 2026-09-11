@@ -65,10 +65,15 @@ func (l *rateLimiter) allow(key string, limit int) bool {
 }
 
 type Price struct {
-	Input    string `json:"input_per_million"`
-	Output   string `json:"output_per_million"`
-	Currency string `json:"currency"`
-	Version  string `json:"version"`
+	Input  string `json:"input_per_million"`
+	Output string `json:"output_per_million"`
+	// Optional: needed only for models whose requests report cache tokens. A
+	// request carrying cache tokens with no rate here is left unpriced rather
+	// than estimated from the input rate, which would misprice it.
+	CacheRead  string `json:"cache_read_per_million,omitempty"`
+	CacheWrite string `json:"cache_write_per_million,omitempty"`
+	Currency   string `json:"currency"`
+	Version    string `json:"version"`
 }
 type App struct {
 	db           *pgxpool.Pool
@@ -131,7 +136,9 @@ func New(ctx context.Context, dsn, origin string) (*App, error) {
 			return nil, errors.New("invalid PRICING_JSON")
 		}
 		for _, p := range a.prices {
-			if !schema.ValidPrice(p.Input,p.Currency) || !schema.ValidPrice(p.Output,p.Currency) || p.Version == "" {
+			optional := (p.CacheRead == "" || schema.ValidPrice(p.CacheRead, p.Currency)) &&
+				(p.CacheWrite == "" || schema.ValidPrice(p.CacheWrite, p.Currency))
+			if !schema.ValidPrice(p.Input, p.Currency) || !schema.ValidPrice(p.Output, p.Currency) || !optional || p.Version == "" {
 				db.Close()
 				return nil, errors.New("invalid pricing entry")
 			}

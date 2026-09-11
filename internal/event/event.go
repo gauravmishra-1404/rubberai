@@ -165,25 +165,68 @@ func (e *Event) ApplyPrivacy(mode string, diffs bool) {
 	}
 }
 
-// Estimate uses caller-configured rates, never a guessed provider price. Cached and
-// reasoning counts are subsets and are not added to input/output a second time.
-func Estimate(u Usage, inputRate, outputRate string) (string, error) {
+// Rates are per-million-token prices supplied by the operator. CacheRead and
+// CacheWrite are optional only in the sense that a request without those tokens
+// never needs them; see Estimate.
+type Rates struct {
+	Input      string
+	Output     string
+	CacheRead  string
+	CacheWrite string
+}
+
+// Estimate uses caller-configured rates, never a guessed provider price.
+//
+// input_tokens is the whole input side, with cached and cache-write counts as
+// subsets of it - that is what keeps total = input + output honest and stops a
+// cache figure being added twice. Pricing therefore charges the remainder after
+// those subsets are taken out, each at its own rate: a cache read costs a
+// fraction of fresh input and a cache write rather more, so charging either at
+// the input rate is wrong in opposite directions. Reasoning tokens are a subset
+// of output and are already covered by the output charge.
+//
+// When a request carries cache tokens and no rate is configured for them, this
+// refuses to estimate rather than returning a total that silently omits a priced
+// component. An incomplete measurement must not be presented as a complete one.
+func Estimate(u Usage, r Rates) (string, error) {
 	if u.Input == nil || u.Output == nil {
 		return "", errors.New("input and output tokens are required to estimate cost")
 	}
-	a, ok := new(big.Rat).SetString(inputRate)
-	if !ok || a.Sign() < 0 {
-		return "", errors.New("invalid input rate")
+	subset := func(v *int64) int64 {
+		if v == nil {
+			return 0
+		}
+		return *v
 	}
-	b, ok := new(big.Rat).SetString(outputRate)
-	if !ok || b.Sign() < 0 {
-		return "", errors.New("invalid output rate")
+	fresh := *u.Input - subset(u.Cached) - subset(u.CacheWrite)
+	if fresh < 0 {
+		return "", errors.New("cached and cache write tokens exceed input tokens")
 	}
-	a.Mul(a, new(big.Rat).SetInt64(*u.Input))
-	b.Mul(b, new(big.Rat).SetInt64(*u.Output))
-	a.Add(a, b)
-	a.Quo(a, big.NewRat(1_000_000, 1))
-	return a.FloatString(12), nil
+	total := new(big.Rat)
+	for _, part := range []struct {
+		count int64
+		value string
+		name  string
+	}{
+		{fresh, r.Input, "input"},
+		{*u.Output, r.Output, "output"},
+		{subset(u.Cached), r.CacheRead, "cache read"},
+		{subset(u.CacheWrite), r.CacheWrite, "cache write"},
+	} {
+		if part.count == 0 {
+			continue
+		}
+		if part.value == "" {
+			return "", errors.New("no configured rate for " + part.name + " tokens")
+		}
+		amount, ok := new(big.Rat).SetString(part.value)
+		if !ok || amount.Sign() < 0 {
+			return "", errors.New("invalid " + part.name + " rate")
+		}
+		total.Add(total, amount.Mul(amount, new(big.Rat).SetInt64(part.count)))
+	}
+	total.Quo(total, big.NewRat(1_000_000, 1))
+	return total.FloatString(12), nil
 }
 
 func addDecimal(a, b string) string {

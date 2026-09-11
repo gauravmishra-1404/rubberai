@@ -99,6 +99,26 @@ Two things here are deliberate and easy to undo by accident:
   include surrounding context, so their line counts report a three-line edit as
   +4/-3 instead of +2/-1.
 
+## 4. Cache-aware cost estimation (new)
+
+The estimator priced only input and output, so a cache-heavy request — the normal
+shape here, where cache reads routinely run 40x fresh input — could not be costed
+at all without being badly wrong.
+
+`Rates` now carries optional `CacheRead` and `CacheWrite` per-million prices.
+
+The subtlety that will bite anyone changing this: **`input_tokens` is the whole
+input side, and cached / cache-write are subsets of it**, not additions. That is
+what keeps `total = input + output` honest. So the estimator charges
+`input - cached - cache_write` at the input rate and each subset at its own rate.
+Charging `input_tokens` in full *and* the subsets double-counts; on a real request
+here that was $15.07 against a correct $1.60.
+
+Cache rates are optional because a model that reports no cache tokens needs none.
+But a request that reports them with no rate configured is refused rather than
+estimated without them — a total that silently omits a priced component looks
+identical to a correct one.
+
 ## Conventions worth keeping
 
 - Validate **before** applying privacy. `Validate()` downgrades an unevidenced
