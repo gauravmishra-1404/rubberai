@@ -20,6 +20,7 @@ RUBBERAI_CLAUDE_CONFIG); see README.md in this directory.
 """
 
 import json
+import hashlib
 import os
 import sys
 import urllib.error
@@ -140,10 +141,7 @@ def post(config: dict, project: dict, events: list) -> bool:
             return 200 <= response.status < 300
     except urllib.error.HTTPError as error:
         debug("HTTP %d: %s" % (error.code, error.read().decode()[:200]))
-        # 4xx means this payload will never be accepted; treat it as delivered so a
-        # single malformed event cannot wedge the offset and stall the session
-        # forever. 5xx and 429 are transient, so the caller retries next turn.
-        return 400 <= error.code < 500 and error.code not in (408, 429)
+        return False
     except OSError as error:
         debug("network error: %s" % error)
         return False
@@ -199,12 +197,21 @@ def flush_transcript(config: dict, project: dict, payload: dict, state: dict) ->
     path = payload.get("transcript_path")
     if not path or not os.path.exists(path):
         return
+    if "boundaries" not in state:
+        # First use / old state / reset: start now, never replay old history.
+        state.clear()
+        state.update(offset=os.path.getsize(path), boundaries=[])
+        write_state(payload.get("session_id") or "", state)
+        return
     offset = state.get("offset", 0)
     try:
         size = os.path.getsize(path)
         # A shorter file than last time means a different or rewritten transcript.
         if offset > size:
-            offset = 0
+            state.clear()
+            state.update(offset=size, boundaries=[])
+            write_state(payload.get("session_id") or "", state)
+            return
         with open(path, "rb") as handle:
             handle.seek(offset)
             raw = handle.read()
@@ -219,8 +226,15 @@ def flush_transcript(config: dict, project: dict, payload: dict, state: dict) ->
         return
     end -= len(remainder.encode("utf-8"))
 
-    events = []
+    events = {}
+    position = offset
     for line in complete.split("\n"):
+        line_start = position
+        position += len(line.encode("utf-8")) + 1
+        turn = {}
+        for boundary in state.get("boundaries", []):
+            if boundary["offset"] <= line_start:
+                turn = boundary
         if not line.strip():
             continue
         try:
@@ -237,38 +251,31 @@ def flush_transcript(config: dict, project: dict, payload: dict, state: dict) ->
         # "API Error: ...") into the transcript as assistant records with the
         # model "<synthetic>" and all-zero usage. No request reached a provider,
         # so recording them would inflate the request count with calls that never
-        # happened. The zero-token guard also covers any future placeholder that
-        # does not use that model name.
+        # happened. Genuine reported zero usage remains a measurement.
         if message.get("model") == SYNTHETIC_MODEL:
             continue
-        if not any(
-            int(usage.get(field) or 0)
-            for field in ("input_tokens", "output_tokens",
-                          "cache_creation_input_tokens", "cache_read_input_tokens")
-        ):
-            continue
-
-        # cache_creation tokens are input the model actually processed this call,
-        # so they belong in input_tokens. cache_read tokens were not reprocessed,
-        # so they go to cached_tokens, which rubberai reports without adding to
-        # the total a second time.
-        input_tokens = int(usage.get("input_tokens") or 0) + int(
-            usage.get("cache_creation_input_tokens") or 0
-        )
-        counts = {
-            "input_tokens": input_tokens,
-            "output_tokens": int(usage.get("output_tokens") or 0),
-        }
-        cached = int(usage.get("cache_read_input_tokens") or 0)
-        if cached:
-            counts["cached_tokens"] = cached
+        # Normalize input to include cache reads/writes; both cache categories
+        # are then subsets, matching the platform's input + output total.
+        counts = {}
+        fields = {"output_tokens": "output_tokens",
+                  "cache_read_input_tokens": "cached_tokens",
+                  "cache_creation_input_tokens": "cache_write_tokens"}
+        for source, target in fields.items():
+            if usage.get(source) is not None:
+                counts[target] = int(usage[source])
+        if usage.get("input_tokens") is not None:
+            counts["input_tokens"] = (int(usage["input_tokens"])
+                + int(usage.get("cache_read_input_tokens") or 0)
+                + int(usage.get("cache_creation_input_tokens") or 0))
         thinking = (usage.get("output_tokens_details") or {}).get("thinking_tokens")
-        if thinking:
+        if thinking is not None:
             counts["reasoning_tokens"] = int(thinking)
 
-        # Message UUID makes the ID stable across retries, so a re-sent batch is
-        # deduplicated by the server instead of inflating token totals.
-        identifier = record.get("uuid") or uuid.uuid4().hex
+        # Provider message identity deduplicates response fragments; transcript
+        # UUID is the fallback when a provider message ID is unavailable.
+        identifier = record.get("uuid") or hashlib.sha256(line.encode()).hexdigest()
+        if message.get("id"):
+            identifier = hashlib.sha256((str(payload.get("session_id", "")) + ":" + str(message["id"])).encode()).hexdigest()
         event = base_event(
             config, project, payload, "llm.request.completed", "evt_llm_" + identifier
         )
@@ -286,9 +293,14 @@ def flush_transcript(config: dict, project: dict, payload: dict, state: dict) ->
         event["status"] = "success"
         if record.get("gitBranch"):
             event["branch"] = record["gitBranch"]
-        events.append(attach_turn(event, state))
+        # A response may have several transcript records (text/tool blocks).
+        # Retain its last usage snapshot once, preserving its first turn link.
+        previous = events.get(event["event_id"])
+        if previous and previous.get("prompt_id"):
+            turn = {"prompt_id": previous["prompt_id"]}
+        events[event["event_id"]] = attach_turn(event, turn)
 
-    if not events or send(config, project, events):
+    if not events or send(config, project, list(events.values())):
         state["offset"] = end
         write_state(payload.get("session_id") or "", state)
 
@@ -296,9 +308,16 @@ def flush_transcript(config: dict, project: dict, payload: dict, state: dict) ->
 def handle(config: dict, project: dict, payload: dict, event_name: str) -> None:
     session_id = payload.get("session_id") or ""
     state = read_state(session_id)
+    pending = state.get("pending_prompts", [])
+    if pending and send(config, project, pending):
+        state.pop("pending_prompts", None)
+        write_state(session_id, state)
 
     if event_name == "SessionStart":
-        state = {"offset": 0}
+        if "boundaries" not in state:
+            path = payload.get("transcript_path")
+            state = {"offset": os.path.getsize(path) if path and os.path.exists(path) else 0,
+                     "boundaries": []}
         write_state(session_id, state)
         event = base_event(
             config, project, payload, "session.started", "evt_sess_" + (session_id or uuid.uuid4().hex)
@@ -311,7 +330,11 @@ def handle(config: dict, project: dict, payload: dict, event_name: str) -> None:
     if event_name == "UserPromptSubmit":
         # One trace per user turn: every tool call and LLM request until the next
         # prompt is attributed to this ID.
+        flush_transcript(config, project, payload, state)
+        path = payload.get("transcript_path")
+        boundary_offset = os.path.getsize(path) if path and os.path.exists(path) else state.get("offset", 0)
         prompt_id = "pmt_" + uuid.uuid4().hex
+        state.setdefault("boundaries", []).append({"offset": boundary_offset, "prompt_id": prompt_id})
         state["prompt_id"] = prompt_id
         write_state(session_id, state)
         event = base_event(
@@ -324,7 +347,11 @@ def handle(config: dict, project: dict, payload: dict, event_name: str) -> None:
             # object is rejected as INVALID_EVENT. Truncated so one pasted wall of
             # text cannot push a batch past the server's 1 MiB body limit.
             event["prompt"] = payload["prompt"][:PROMPT_LIMIT]
-        send(config, project, [event])
+        state.setdefault("pending_prompts", []).append(event)
+        write_state(session_id, state)
+        if send(config, project, state["pending_prompts"]):
+            state.pop("pending_prompts", None)
+            write_state(session_id, state)
         return
 
     if event_name in ("PostToolUse", "PostToolUseFailure"):

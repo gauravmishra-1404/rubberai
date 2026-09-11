@@ -84,18 +84,18 @@ session transcript (`transcript_path`, JSONL) at a stored byte offset kept under
 
 | rubberai | Claude Code |
 | --- | --- |
-| `input_tokens` | `input_tokens` + `cache_creation_input_tokens` |
+| `input_tokens` | `input_tokens` + `cache_creation_input_tokens` + `cache_read_input_tokens` |
 | `output_tokens` | `output_tokens` |
 | `cached_tokens` | `cache_read_input_tokens` |
+| `cache_write_tokens` | `cache_creation_input_tokens` |
 | `reasoning_tokens` | `output_tokens_details.thinking_tokens` |
 
-Cache *creation* tokens are input the model processed on that call, so they count
-as input. Cache *reads* were not reprocessed, so they are reported separately;
-rubberai does not add cached or reasoning counts into the total a second time.
+Cache reads and writes are included in normalized input and also shown separately.
+The total adds input and output only, so subsets are not counted twice.
 
 The offset advances only after rubberai accepts the batch, so a failed send is
 retried on the next turn rather than dropped. Event IDs are derived from the
-transcript message UUID, so a retry after a partial failure is deduplicated by
+provider message ID (falling back to transcript UUID), so a retry after a partial failure is deduplicated by
 the server instead of double-counting tokens.
 
 Costs are not sent. Configure `PRICING_JSON` on the server to estimate them, per
@@ -104,9 +104,9 @@ the main README.
 ## Failure behavior
 
 The adapter never disrupts a coding session: unreadable config, an unreachable
-server, or a malformed payload all exit 0 silently. A 4xx response is treated as
-delivered so one rejected event cannot stall the offset; 408, 429 and 5xx are
-retried on the next turn.
+server, or a malformed payload all exit 0 silently. Failed submissions retain
+the transcript offset and pending prompts for retry. Permanent rejections require
+correcting the integration/configuration; debug mode exposes the response.
 
 Because it is silent, set `RUBBERAI_DEBUG=1` to trace to stderr when checking
 whether it works:
@@ -127,3 +127,18 @@ Claude Code reports no per-request duration or provider cost to a hook, so
 evidence — an integration assertion, not independent verification. Events reach
 the server per hook invocation; run the [collector](../../cmd/collector) and point
 `url` at it for durable buffering across server restarts.
+
+## Prompt boundaries and token accounting
+
+New or missing adapter state starts at the current transcript position. Do not
+clear offsets to replay old history after clearing a dashboard. Each submitted
+prompt records a byte boundary; retrying delivery retains the original boundary.
+Pending prompt submissions are retried with their original IDs. Internal model
+records do not create `prompt.created` events. Late asynchronous records that
+cross turn boundaries are not reconstructed into a proven causality tree.
+
+Input is normalized as fresh input + cache reads + cache writes, following
+[Anthropic's usage definition](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+`cached_tokens` and `cache_write_tokens` expose those subsets separately; total
+is input + output. Zero is preserved when reported, and absent counts stay absent.
+Existing stored events are not rewritten to the new accounting.
