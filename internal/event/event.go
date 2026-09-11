@@ -45,6 +45,10 @@ type File struct {
 	AfterHash    string `json:"after_hash,omitempty"`
 	ChangeSource string `json:"change_source,omitempty"`
 	Evidence     string `json:"evidence,omitempty"`
+	// Status is the version-control state at the moment of the change - staged,
+	// unstaged, untracked - which tells a reviewer whether a change is merely
+	// written or already on its way into a commit.
+	Status string `json:"status,omitempty"`
 }
 type Event struct {
 	ID         string                     `json:"event_id"`

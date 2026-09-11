@@ -290,6 +290,36 @@ def worktree_state(cwd: str):
     return state
 
 
+# git status --porcelain reports two columns: the index state and the worktree
+# state. A file can be both, when part of it is staged and the rest is not.
+GIT_STATE = {"M": "modified", "A": "added", "D": "deleted", "R": "renamed", "C": "copied"}
+
+
+def worktree_status(cwd: str) -> dict:
+    """Version-control state per path: staged, unstaged, both, or untracked."""
+    porcelain = git(cwd, "status", "--porcelain")
+    if porcelain is None:
+        return {}
+    status = {}
+    for line in porcelain.splitlines():
+        if len(line) < 4:
+            continue
+        index, worktree, path = line[0], line[1], line[3:]
+        if " -> " in path:                      # renamed: report the new path
+            path = path.split(" -> ", 1)[1]
+        path = path.strip('"')
+        if index == "?" and worktree == "?":
+            status[path] = "untracked"
+            continue
+        parts = []
+        if index != " ":
+            parts.append("staged " + GIT_STATE.get(index, "changed"))
+        if worktree != " ":
+            parts.append("unstaged " + GIT_STATE.get(worktree, "changed"))
+        status[path] = ", ".join(parts) or "changed"
+    return status
+
+
 def worktree_changes(cwd: str, state: dict, send_diffs: bool):
     """Files changed since the last check, with the line delta for each."""
     current = worktree_state(cwd)
@@ -300,6 +330,7 @@ def worktree_changes(cwd: str, state: dict, send_diffs: bool):
         # was already dirty is not work this prompt did.
         return [], current
     previous = state["worktree"]
+    status = worktree_status(cwd)
     changes = []
     for path, entry in current.items():
         added, removed, untracked = entry
@@ -314,6 +345,7 @@ def worktree_changes(cwd: str, state: dict, send_diffs: bool):
             "operation": "created" if untracked else "modified",
             "change_source": "AI",
             "evidence": AGENT_NAME + ":worktree",
+            "status": status.get(path, "unstaged modified"),
             # The delta since the previous check, so a row reads as what this step
             # did rather than everything accumulated since the last commit.
             "lines_added": max(added - was[0], 0),
