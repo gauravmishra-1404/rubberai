@@ -83,6 +83,22 @@ dominated by the agentic loop rather than by the user's own turns.
 The current implementation adds per-group cost and a structured prompt detail.
 The earlier notes above describe the original change, not its final validation state.
 
+## 3. Change detail (new)
+
+File events carried only a path, so a turn's edits could be counted but not read.
+The adapter now derives each change from the tool call that made it and the
+dashboard renders it as a diff.
+
+Two things here are deliberate and easy to undo by accident:
+
+- **Metadata and content are gated separately.** Line counts and hashes always go;
+  diff text needs `send_diffs` on the integration *and* a project that stores
+  diffs and is not metadata-only. Collapsing those into one switch would leak
+  source into a project that asked for metadata only.
+- **Counts come from diff opcodes, not string lengths.** `old_string`/`new_string`
+  include surrounding context, so their line counts report a three-line edit as
+  +4/-3 instead of +2/-1.
+
 ## Conventions worth keeping
 
 - Validate **before** applying privacy. `Validate()` downgrades an unevidenced

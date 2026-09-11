@@ -62,6 +62,23 @@ and `SessionEnd`:
 `async: true` matters: hooks then run in the background instead of delaying the
 editor. Omitting `matcher` on the tool events records every tool.
 
+## Recording what changed
+
+Line counts and before/after hashes are metadata and are always sent. Diff text is
+source code, so it is sent only when `send_diffs` is true in the configuration —
+and the server still discards it unless the project stores diffs and is not
+collecting metadata only. Both gates must be open for a diff to be kept.
+
+Changes are derived from the tool call itself, which carries the exact strings
+replaced, rather than by re-reading the file: the hook runs after the edit, so
+re-reading would race with whatever the agent does next. Line counts come from the
+diff opcodes, not the sizes of the replaced strings, because those strings include
+surrounding context and would overstate the change. A whole-file `Write` reports
+every line as added, since no prior content reaches the hook.
+
+Diffs are truncated at 40,000 characters so one large edit cannot push a batch past
+the server's 1 MiB body limit.
+
 ## Events
 
 | Hook | Events |
