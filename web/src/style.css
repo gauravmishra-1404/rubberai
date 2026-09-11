@@ -24,3 +24,23 @@
 .prompt-detail td:first-child { min-width: 0; }
 
 .prompt-detail td { white-space: nowrap; overflow-wrap: normal; }
+
+/* Change summary and diff rendering. Colour alone never carries the meaning: a
+   diff keeps its +/- prefixes and the counts keep their signs, so the view still
+   reads correctly without colour perception. */
+.change h3 { font-size: .95rem; margin: 0 0 .25rem; word-break: break-all; }
+.added { color: #0f7b3f; font-weight: 600; }
+.removed { color: #b3261e; font-weight: 600; }
+pre.diff {
+  max-height: 26rem;
+  overflow: auto;
+  line-height: 1.45;
+  tab-size: 2;
+}
+pre.diff .added { background: rgba(15, 123, 63, .12); display: block; font-weight: 400; }
+pre.diff .removed { background: rgba(179, 38, 30, .12); display: block; font-weight: 400; }
+pre.diff .hunk { color: #6b7280; display: block; }
+@media (prefers-color-scheme: dark) {
+  .added { color: #4ade80; }
+  .removed { color: #f87171; }
+}

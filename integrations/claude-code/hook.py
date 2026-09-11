@@ -19,8 +19,9 @@ Configuration lives in ~/.config/rubberai/claude-code.json (override with
 RUBBERAI_CLAUDE_CONFIG); see README.md in this directory.
 """
 
-import json
+import difflib
 import hashlib
+import json
 import os
 import sys
 import urllib.error
@@ -32,6 +33,7 @@ AGENT_NAME = "claude-code"
 BATCH_LIMIT = 100
 HTTP_TIMEOUT = 5
 PROMPT_LIMIT = 20000
+DIFF_LIMIT = 40000
 SYNTHETIC_MODEL = "<synthetic>"
 
 # Claude Code reports where it is running as an "entrypoint"; rubberai wants an
@@ -181,6 +183,50 @@ def attach_turn(event: dict, state: dict) -> dict:
         event["prompt_id"] = prompt_id
         event["trace_id"] = prompt_id
     return event
+
+
+def describe_change(tool_name: str, tool_input: dict, send_diffs: bool) -> dict:
+    """Summarise what an edit did, from the tool call that performed it.
+
+    Claude Code hands the adapter the exact strings it replaced, so the change can
+    be described without re-reading the file - which would race with whatever the
+    agent does next. Line counts are metadata and always reported; the diff text is
+    source code, so it is only attached when explicitly enabled. The server drops
+    it again unless the project stores diffs.
+    """
+    if tool_name == "Write":
+        # A whole-file write: no prior content reaches the hook, so every line is
+        # reported as added rather than guessing at what it replaced.
+        after = tool_input.get("content") or ""
+        before = ""
+    else:
+        before = tool_input.get("old_string") or ""
+        after = tool_input.get("new_string") or ""
+    before_lines = before.splitlines()
+    after_lines = after.splitlines()
+    # The replaced strings carry surrounding context, so their raw lengths overstate
+    # the change. Counting only the lines the matcher reports as replaced or
+    # inserted gives the figures a reader expects from "+2 -1".
+    added = removed = 0
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(
+        None, before_lines, after_lines, autojunk=False
+    ).get_opcodes():
+        if op != "equal":
+            removed += i2 - i1
+            added += j2 - j1
+    change = {"lines_added": added, "lines_removed": removed}
+    if before:
+        change["before_hash"] = hashlib.sha256(before.encode()).hexdigest()
+    if after:
+        change["after_hash"] = hashlib.sha256(after.encode()).hexdigest()
+    if send_diffs:
+        diff = "\n".join(difflib.unified_diff(
+            before_lines, after_lines, lineterm="", n=2,
+            fromfile="before", tofile="after",
+        ))
+        if diff:
+            change["diff"] = diff[:DIFF_LIMIT]
+    return change
 
 
 def language_for(path: str):
@@ -381,6 +427,9 @@ def handle(config: dict, project: dict, payload: dict, event_name: str) -> None:
                 "change_source": "AI",
                 "evidence": AGENT_NAME + ":" + tool_name,
             }
+            file_event["file"].update(
+                describe_change(tool_name, tool_input, bool(config.get("send_diffs")))
+            )
             language = language_for(file_path)
             if language:
                 file_event["language"] = language
