@@ -221,6 +221,29 @@ func TestPostgresEndToEnd(t *testing.T) {
 			t.Fatal("deleted event still listed")
 		}
 	}
+	// The demo session: reads exactly one project, writes nothing. A second
+	// project in the same organization proves the scope is the project, not the
+	// organization; every mutating route proves the guard is server-side.
+	a.demoProject = id
+	hidden := request(owner, "POST", prefix+"/projects", "", map[string]any{"name": "not for the demo", "privacy": "FULL"}, 201)
+	demoJar, _ := cookiejar.New(nil)
+	demo := &http.Client{Jar: demoJar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	request(demo, "GET", "/demo", "", nil, 303)
+	me := request(demo, "GET", prefix+"/me", "", nil, 200)
+	if me["demo"] != id {
+		t.Fatal("demo session not marked read-only", me)
+	}
+	request(demo, "GET", path+"/analytics", "", nil, 200)
+	request(demo, "GET", prefix+"/projects/"+hidden["id"].(string)+"/analytics", "", nil, 404)
+	request(demo, "POST", prefix+"/projects", "", map[string]any{"name": "x"}, 403)
+	request(demo, "PATCH", path, "", map[string]any{"name": "renamed", "privacy": "FULL"}, 403)
+	request(demo, "POST", path+"/keys", "", map[string]string{"name": "x"}, 403)
+	request(demo, "DELETE", path+"/keys/"+k["id"].(string), "", nil, 403)
+	request(demo, "DELETE", path+"/events/"+e.ID, "", nil, 403)
+	request(demo, "GET", path+"/keys", "", nil, 403)
+	a.demoProject = ""
+	request(demo, "GET", "/demo", "", nil, 404)
+
 	request(owner, "DELETE", path+"/keys/"+k["id"].(string), "", nil, 200)
 	request(http.DefaultClient, "POST", prefix+"/events", key, e, 401)
 	request(owner, "POST", prefix+"/auth/logout", "", nil, 200)

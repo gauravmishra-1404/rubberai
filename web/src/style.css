@@ -301,3 +301,13 @@ td.summary { width: 1%; white-space: nowrap; vertical-align: top; }
 .actions { display: flex; gap: 8px; }
 button.danger { border-color: var(--error-line); color: var(--error-ink); background: var(--error-bg); }
 button.danger:hover { background: var(--error-line); color: var(--ink); }
+
+/* Demo banner: the first thing a visitor reads, so it says what this is and what
+   it is not, and offers the one action that leads somewhere - their own workspace. */
+.demo-banner {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin: -12px 0 20px; padding: 10px 14px; border-radius: 8px; font-size: 12.5px;
+  background: var(--accent-bg); border: 1px solid var(--accent-line); color: var(--muted);
+}
+.demo-banner b { color: var(--badge-ink); }
+.demo-banner .text-button { padding: 0; font-size: 12.5px; }

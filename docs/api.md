@@ -28,6 +28,16 @@ deployment - accepts the address and records it as unchecked rather than
 refusing the registration. The check establishes that a domain can receive
 mail, never that the person owns the address. Returns 400 `INVALID_EMAIL`.
 
+`GET /demo` (not under `/api/v1`) opens a read-only session confined to the
+project named by the server's `DEMO_PROJECT_ID`, then redirects to the dashboard.
+It is a plain GET so a link on any page can open it, and it holds no credential:
+the session is minted server-side and expires after an hour. A demo session can
+read that one project - events, analytics, diffs - and nothing else: every
+mutating route, and the key listing, answers 403 `READ_ONLY`, and any other
+project in the organization answers 404. `/me` reports `demo` with the project
+id so a client can hide what the session cannot do. With no `DEMO_PROJECT_ID`
+configured the route answers 404.
+
 The session cookie is HttpOnly, SameSite=Strict, and Secure when APP_ORIGIN uses
 HTTPS. Browser writes must originate from APP_ORIGIN. Ingestion API keys cannot
 use account, project, analytics or key-management endpoints.

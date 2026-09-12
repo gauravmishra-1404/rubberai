@@ -29,7 +29,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-//go:embed schema.sql schema2.sql web/*
+//go:embed schema.sql schema2.sql schema3.sql web/*
 var assets embed.FS
 
 type rateWindow struct {
@@ -92,11 +92,16 @@ type App struct {
 	keyLimit     int
 	projectLimit int
 	orgLimit     int
+	demoProject  string
 }
 type User struct {
 	ID             string `json:"id"`
 	OrganizationID string `json:"organization_id"`
 	DisplayName    string `json:"display_name"`
+	// Demo is the project a read-only session is confined to; empty for a
+	// normal login. Exposed so the dashboard can hide what such a session
+	// cannot do rather than letting every write fail on click.
+	Demo string `json:"demo,omitempty"`
 }
 type Project struct {
 	ID            string `json:"id"`
@@ -132,7 +137,7 @@ func New(ctx context.Context, dsn, origin string) (*App, error) {
 		db.Close()
 		return nil, err
 	}
-	a := &App{db: db, origin: origin, secure: u.Scheme == "https", keyLimit: envInt("KEY_REQUESTS_PER_MINUTE", 600), projectLimit: envInt("PROJECT_REQUESTS_PER_MINUTE", 3000), orgLimit: envInt("ORG_REQUESTS_PER_MINUTE", 10000)}
+	a := &App{db: db, origin: origin, secure: u.Scheme == "https", keyLimit: envInt("KEY_REQUESTS_PER_MINUTE", 600), projectLimit: envInt("PROJECT_REQUESTS_PER_MINUTE", 3000), orgLimit: envInt("ORG_REQUESTS_PER_MINUTE", 10000), demoProject: os.Getenv("DEMO_PROJECT_ID")}
 	if raw := os.Getenv("PRICING_JSON"); raw != "" {
 		if err = json.Unmarshal([]byte(raw), &a.prices); err != nil {
 			db.Close()
@@ -218,6 +223,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/register", a.register)
 	mux.HandleFunc("POST /api/v1/auth/login", a.login)
 	mux.HandleFunc("POST /api/v1/auth/logout", a.logout)
+	mux.HandleFunc("GET /demo", a.demo)
 	mux.HandleFunc("GET /api/v1/me", func(w http.ResponseWriter, r *http.Request) {
 		u, ok := a.user(w, r)
 		if ok {
@@ -268,7 +274,7 @@ func (a *App) user(w http.ResponseWriter, r *http.Request) (User, bool) {
 	var u User
 	c, err := r.Cookie("rubberai_session")
 	if err == nil {
-		err = a.db.QueryRow(r.Context(), `SELECT u.id,u.organization_id,u.display_name FROM logins l JOIN users u ON u.id=l.user_id WHERE l.token_hash=$1 AND l.expires_at>now()`, digest(c.Value)).Scan(&u.ID, &u.OrganizationID, &u.DisplayName)
+		err = a.db.QueryRow(r.Context(), `SELECT u.id,u.organization_id,u.display_name,l.scope FROM logins l JOIN users u ON u.id=l.user_id WHERE l.token_hash=$1 AND l.expires_at>now()`, digest(c.Value)).Scan(&u.ID, &u.OrganizationID, &u.DisplayName, &u.Demo)
 	}
 	if err != nil {
 		fail(w, 401, "UNAUTHENTICATED", "Sign in to continue")
@@ -276,10 +282,30 @@ func (a *App) user(w http.ResponseWriter, r *http.Request) (User, bool) {
 	}
 	return u, true
 }
+// writer resolves a session that is allowed to change things. A demo session
+// can read one project and nothing more; refusing it here, in one place, is what
+// makes "read-only" a property of the server rather than of whichever buttons
+// the dashboard happens to hide.
+func (a *App) writer(w http.ResponseWriter, r *http.Request) (User, bool) {
+	u, ok := a.user(w, r)
+	if !ok {
+		return u, false
+	}
+	if u.Demo != "" {
+		fail(w, 403, "READ_ONLY", "The demo is read-only. Create your own workspace to make changes.")
+		return u, false
+	}
+	return u, true
+}
+
 func (a *App) project(w http.ResponseWriter, r *http.Request) (Project, bool) {
 	var p Project
 	u, ok := a.user(w, r)
 	if !ok {
+		return p, false
+	}
+	if u.Demo != "" && r.PathValue("project") != u.Demo {
+		fail(w, 404, "PROJECT_NOT_FOUND", "Project not found")
 		return p, false
 	}
 	err := a.db.QueryRow(r.Context(), `SELECT id,name,description,repository_url,privacy,track_diffs FROM projects WHERE id=$1 AND organization_id=$2`, r.PathValue("project"), u.OrganizationID).Scan(&p.ID, &p.Name, &p.Description, &p.RepositoryURL, &p.Privacy, &p.TrackDiffs)
@@ -336,7 +362,7 @@ func (a *App) register(w http.ResponseWriter, r *http.Request) {
 	}
 	salt := token("")
 	hash := salt + ":" + passwordHash(b.Password, salt)
-	u := User{token("usr_"), token("org_"), b.DisplayName}
+	u := User{ID: token("usr_"), OrganizationID: token("org_"), DisplayName: b.DisplayName}
 	tx, beginErr := a.db.Begin(r.Context())
 	if beginErr != nil {
 		fail(w, 503, "STORAGE_ERROR", "Database unavailable")
@@ -392,6 +418,39 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	}
 	a.session(w, r, u)
 }
+// demo issues a read-only session confined to the configured demo project and
+// sends the visitor to the dashboard. It is a GET so a plain link on a marketing
+// page can open it, and it holds no credential: the session is minted here, tied
+// to the project's owning organization, and can only read.
+//
+// The cookie is SameSite=Lax rather than Strict. Strict cookies are withheld on
+// a navigation that started on another site, which is exactly how every demo
+// visitor arrives, so a Strict cookie would land them on the login page. Lax is
+// safe here because the session cannot perform any write for a forged request
+// to abuse.
+func (a *App) demo(w http.ResponseWriter, r *http.Request) {
+	if a.demoProject == "" {
+		fail(w, 404, "NO_DEMO", "No demo is configured")
+		return
+	}
+	if !a.authLimit(w, r) {
+		return
+	}
+	var owner string
+	err := a.db.QueryRow(r.Context(), `SELECT u.id FROM projects p JOIN users u ON u.organization_id=p.organization_id WHERE p.id=$1 ORDER BY u.created_at LIMIT 1`, a.demoProject).Scan(&owner)
+	if err != nil {
+		fail(w, 404, "NO_DEMO", "The demo project does not exist")
+		return
+	}
+	key := token("")
+	if _, err = a.db.Exec(r.Context(), `INSERT INTO logins(token_hash,user_id,expires_at,scope) VALUES($1,$2,now()+interval '1 hour',$3)`, digest(key), owner, a.demoProject); err != nil {
+		fail(w, 500, "STORAGE_ERROR", "Could not start the demo")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: "rubberai_session", Value: key, Path: "/", HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteLaxMode, MaxAge: 3600})
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
 func (a *App) logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie("rubberai_session"); err == nil {
 		if _, err = a.db.Exec(r.Context(), `DELETE FROM logins WHERE token_hash=$1`, digest(c.Value)); err != nil {
@@ -407,7 +466,7 @@ func (a *App) projects(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, err := a.db.Query(r.Context(), `SELECT id,name,description,repository_url,privacy,track_diffs FROM projects WHERE organization_id=$1 ORDER BY created_at DESC`, u.OrganizationID)
+	rows, err := a.db.Query(r.Context(), `SELECT id,name,description,repository_url,privacy,track_diffs FROM projects WHERE organization_id=$1 AND ($2='' OR id=$2) ORDER BY created_at DESC`, u.OrganizationID, u.Demo)
 	if err != nil {
 		fail(w, 500, "STORAGE_ERROR", "Could not list projects")
 		return
@@ -432,7 +491,7 @@ func validProject(p Project) bool {
 	return len(strings.TrimSpace(p.Name)) > 0 && len(p.Name) <= 120 && len(p.Description) <= 2000 && len(p.RepositoryURL) <= 2000 && (p.Privacy == "METADATA_ONLY" || p.Privacy == "REDACTED" || p.Privacy == "FULL")
 }
 func (a *App) createProject(w http.ResponseWriter, r *http.Request) {
-	u, ok := a.user(w, r)
+	u, ok := a.writer(w, r)
 	if !ok {
 		return
 	}
@@ -453,6 +512,9 @@ func (a *App) createProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, p)
 }
 func (a *App) updateProject(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.writer(w, r); !ok {
+		return
+	}
 	p, ok := a.project(w, r)
 	if !ok {
 		return
@@ -474,6 +536,11 @@ func (a *App) updateProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, p)
 }
 func (a *App) keys(w http.ResponseWriter, r *http.Request) {
+	// Key names and ids are not secrets, but they are operational detail a demo
+	// visitor has no reason to see; the guard keeps the list owner-only.
+	if _, ok := a.writer(w, r); !ok {
+		return
+	}
 	p, ok := a.project(w, r)
 	if !ok {
 		return
@@ -502,6 +569,9 @@ func (a *App) keys(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 func (a *App) createKey(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.writer(w, r); !ok {
+		return
+	}
 	p, ok := a.project(w, r)
 	if !ok {
 		return
@@ -526,6 +596,9 @@ func (a *App) createKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, map[string]string{"id": id, "api_key": raw, "scope": "events:write", "project_id": p.ID})
 }
 func (a *App) revokeKey(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.writer(w, r); !ok {
+		return
+	}
 	p, ok := a.project(w, r)
 	if !ok {
 		return
@@ -559,7 +632,7 @@ func migrate(ctx context.Context, db *pgxpool.Pool) error {
 	for _, step := range []struct {
 		version int
 		file    string
-	}{{1, "schema.sql"}, {2, "schema2.sql"}} {
+	}{{1, "schema.sql"}, {2, "schema2.sql"}, {3, "schema3.sql"}} {
 		var applied bool
 		if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)", step.version).Scan(&applied); err != nil {
 			return err

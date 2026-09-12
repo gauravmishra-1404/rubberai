@@ -367,6 +367,9 @@ func (a *App) metrics(w http.ResponseWriter, r *http.Request) {
 // leaked". It is owner-only through the same project check every dashboard
 // read uses; an ingestion key cannot reach it.
 func (a *App) deleteEvent(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.writer(w, r); !ok {
+		return
+	}
 	p, ok := a.project(w, r)
 	if !ok {
 		return
