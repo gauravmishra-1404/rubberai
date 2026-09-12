@@ -209,6 +209,18 @@ func TestPostgresEndToEnd(t *testing.T) {
 			t.Fatal("missing tokens became zero", st)
 		}
 	}
+	// Purging a stored event: another organization sees nothing to delete, an
+	// ingestion key is refused outright, the owner succeeds exactly once, and
+	// the row is gone from the listing afterwards.
+	request(other, "DELETE", path+"/events/"+prompt.ID, "", nil, 404)
+	request(http.DefaultClient, "DELETE", path+"/events/"+prompt.ID, key, nil, 401)
+	request(owner, "DELETE", path+"/events/"+prompt.ID, "", nil, 200)
+	request(owner, "DELETE", path+"/events/"+prompt.ID, "", nil, 404)
+	for _, row := range request(owner, "GET", path+"/events?prompt_id="+prompt.PromptID, "", nil, 200)["events"].([]any) {
+		if row.(map[string]any)["event_id"] == prompt.ID {
+			t.Fatal("deleted event still listed")
+		}
+	}
 	request(owner, "DELETE", path+"/keys/"+k["id"].(string), "", nil, 200)
 	request(http.DefaultClient, "POST", prefix+"/events", key, e, 401)
 	request(owner, "POST", prefix+"/auth/logout", "", nil, 200)

@@ -232,6 +232,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/projects/{project}/keys/{key}", a.revokeKey)
 	mux.HandleFunc("POST /api/v1/events", a.ingest)
 	mux.HandleFunc("GET /api/v1/projects/{project}/events", a.events)
+	mux.HandleFunc("DELETE /api/v1/projects/{project}/events/{event}", a.deleteEvent)
 	mux.HandleFunc("GET /api/v1/projects/{project}/analytics", a.analytics)
 	mux.HandleFunc("GET /api/v1/metrics", a.metrics)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, 404, "NOT_FOUND", "Unknown API endpoint") })

@@ -295,3 +295,9 @@ td.summary { width: 1%; white-space: nowrap; vertical-align: top; }
 /* Explains why a field just disappeared. Sits under the username it refers to,
    so the reason is where the change happened. */
 .note { margin: -8px 0 0; }
+
+/* Destructive action: visibly different from every other button, and it always
+   confirms first. Kept beside Close so it is found where the event is read. */
+.actions { display: flex; gap: 8px; }
+button.danger { border-color: var(--error-line); color: var(--error-ink); background: var(--error-bg); }
+button.danger:hover { background: var(--error-line); color: var(--ink); }

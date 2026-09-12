@@ -359,3 +359,26 @@ func (a *App) metrics(w http.ResponseWriter, r *http.Request) {
 	stats := a.db.Stat()
 	writeJSON(w, 200, map[string]any{"requests": a.requests.Load(), "request_duration_ns_total": a.requestNanos.Load(), "accepted_events": a.accepted.Load(), "duplicate_events": a.duplicates.Load(), "failed_ingestion": a.failures.Load(), "heap_bytes": mem.HeapAlloc, "goroutines": runtime.NumGoroutine(), "database_connections": stats.TotalConns(), "database_acquire_duration_ns": stats.AcquireDuration().Nanoseconds()})
 }
+
+// deleteEvent removes one stored event. Events are otherwise immutable, and the
+// analytics are projections of them, so this exists for exactly one reason: a
+// prompt or diff that captured something it should not have - a pasted secret, a
+// credential - has to be purgeable, and "immutable" must not mean "permanently
+// leaked". It is owner-only through the same project check every dashboard
+// read uses; an ingestion key cannot reach it.
+func (a *App) deleteEvent(w http.ResponseWriter, r *http.Request) {
+	p, ok := a.project(w, r)
+	if !ok {
+		return
+	}
+	tag, err := a.db.Exec(r.Context(), `DELETE FROM events WHERE project_id=$1 AND event_id=$2`, p.ID, r.PathValue("event"))
+	if err != nil {
+		fail(w, 500, "STORAGE_ERROR", "Could not delete event")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		fail(w, 404, "EVENT_NOT_FOUND", "No such event in this project")
+		return
+	}
+	writeJSON(w, 200, map[string]int64{"deleted": tag.RowsAffected()})
+}
