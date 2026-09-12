@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Gaurav Mishra
 .PHONY: build test check
 build:
 	cd web && npm ci && npm run check && npm run build

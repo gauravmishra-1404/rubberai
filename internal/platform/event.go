@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Gaurav Mishra
+
 // The public schema is shared with collectors and senders.
 package platform
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Gaurav Mishra
+
 // Package collector provides a bounded, durable, local outbox. Its HTTP endpoint
 // acknowledges only after the event has been synced to disk.
 package collector

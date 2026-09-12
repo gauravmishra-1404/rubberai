@@ -1,3 +1,7 @@
+/*
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2026 Gaurav Mishra
+*/
 /* Dark by default: the dashboard is a developer tool and sits beside a dark
    editor, so dark is the base palette rather than an OS-conditional override.
    The original light palette is kept intact under [data-theme="light"], so it is

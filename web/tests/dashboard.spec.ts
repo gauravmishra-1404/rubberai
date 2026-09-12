@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Gaurav Mishra
 import { test, expect } from '@playwright/test';
 
 test('register, ingest, inspect a trace, change privacy and revoke a key',async({page,request},testInfo)=>{

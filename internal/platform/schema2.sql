@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 Gaurav Mishra
 -- Optional contact address for an account. Nullable and never required: the
 -- platform identifies a user by username, and the specification forbids making
 -- an email address necessary to identify anyone.

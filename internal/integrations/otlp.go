@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Gaurav Mishra
+
 // Package integrations translates external protocols without coupling storage to tools.
 package integrations
 

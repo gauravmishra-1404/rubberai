@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Gaurav Mishra
 """Run against a local rubberai instance; no dependencies needed."""
 import json
 import os

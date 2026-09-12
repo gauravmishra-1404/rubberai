@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Gaurav Mishra
 """Claude Code -> rubberai bridge.
 
 Claude Code invokes this once per hook event, passing the hook payload as JSON on

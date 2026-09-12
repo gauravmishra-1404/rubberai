@@ -1,3 +1,7 @@
+<!--
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2026 Gaurav Mishra
+-->
 <script lang="ts">
  import { onMount } from 'svelte';
  type Project={id:string;name:string;description:string;repository_url:string;privacy:string;track_diffs:boolean};

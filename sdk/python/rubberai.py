@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Gaurav Mishra
 """Dependency-free example SDK. Background delivery never raises into agent code.
 
 Use a localhost Go collector URL for durable offline buffering. A direct server

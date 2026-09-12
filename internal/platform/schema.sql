@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 Gaurav Mishra
 CREATE TABLE IF NOT EXISTS schema_migrations (version integer PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS organizations (id text PRIMARY KEY, name text NOT NULL);
 CREATE TABLE IF NOT EXISTS users (

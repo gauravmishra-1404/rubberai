@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Gaurav Mishra
 services:
   db:
     image: postgres:17-alpine

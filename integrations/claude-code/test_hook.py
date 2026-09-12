@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Gaurav Mishra
 import importlib.util
 import json
 import os

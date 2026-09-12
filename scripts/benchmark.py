@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Gaurav Mishra
 """Small localhost smoke benchmark. Never point at a production server."""
 import json, os, time, uuid, statistics, urllib.request, http.cookiejar
 from datetime import datetime, timezone

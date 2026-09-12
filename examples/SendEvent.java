@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Gaurav Mishra
 import java.net.URI;
 import java.net.http.*;
 import java.time.*;

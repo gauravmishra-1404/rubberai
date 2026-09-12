@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Gaurav Mishra
 FROM node:22-alpine AS dashboard
 WORKDIR /src/web
 COPY web/package*.json ./

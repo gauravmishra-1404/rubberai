@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Gaurav Mishra
+
 // rubberai-send connects shell hooks, CI scripts and custom tools to the same API.
 package main
 
