@@ -118,6 +118,9 @@
   footer{margin-top:64px;padding-top:20px;border-top:1px solid var(--line);
          display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;font-size:.86rem;color:var(--muted)}
   footer .links{display:flex;gap:16px;flex-wrap:wrap}
+  .visitors{display:inline-flex;align-items:baseline;gap:6px;font-variant-numeric:tabular-nums}
+  .visitors b{font-weight:600;color:var(--ink)}
+  .visitors .eg{font-size:.7rem;color:var(--muted);border:1px dashed var(--line);border-radius:4px;padding:0 5px}
 
   /* file-changes sheet fragment */
   .sheet{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:18px 0 8px}
@@ -361,8 +364,34 @@ curl https://rubberai.example/api/v1/events \
       <a href="https://github.com/gauravmishra-1404/rubberai/blob/main/docs/api.md">Documentation</a>
       <a href="https://github.com/gauravmishra-1404/rubberai/blob/main/LICENSE">MIT license</a>
     </div>
+    <span class="visitors" id="visitors" hidden><b id="visitor-count"></b> visitors · <a href="https://www.goatcounter.com/">counted without cookies</a></span>
     <span>rubberai · Evidence over assumptions.</span>
   </footer>
+  <script>
+  // Visitor count via GoatCounter: no cookies, no personal data, no consent banner
+  // needed, which is the only kind of counter this page could honestly carry.
+  // Set the site code below once the GoatCounter site exists and has
+  // "Allow adding visitor counts on your website" enabled. Until then nothing
+  // loads and the footer line stays hidden rather than showing a broken number.
+  (function () {
+    var code = '';                       // e.g. 'rubberai' for rubberai.goatcounter.com
+    if (!code) return;
+    var base = 'https://' + code + '.goatcounter.com';
+    var s = document.createElement('script');
+    s.async = true;
+    s.src = 'https://gc.zgo.at/count.js';
+    s.setAttribute('data-goatcounter', base + '/count');
+    document.head.appendChild(s);
+    fetch(base + '/counter/' + encodeURIComponent(location.pathname) + '.json')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d || !d.count) return;
+        document.getElementById('visitor-count').textContent = d.count;
+        document.getElementById('visitors').hidden = false;
+      })
+      .catch(function () {});
+  })();
+  </script>
 
 </div>
 </body>
