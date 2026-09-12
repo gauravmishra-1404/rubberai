@@ -92,3 +92,29 @@ func TestCollectorAuthAndCapacity(t *testing.T) {
 		}
 	}
 }
+
+func TestConnectionHubScopesRoutesAndTokens(t *testing.T) {
+	secretA := strings.Repeat("a", 32)
+	secretB := strings.Repeat("b", 32)
+	handler, connections, err := Connections(Config{Connections: []Connection{
+		{ID: "claude", ProjectID: "prj_one", Endpoint: "http://localhost:8080", Key: "rai_one", LocalToken: secretA, Outbox: t.TempDir()},
+		{ID: "codex", ProjectID: "prj_two", Endpoint: "http://localhost:8080", Key: "rai_two", LocalToken: secretB, Outbox: t.TempDir()},
+	}})
+	if err != nil || len(connections) != 2 {
+		t.Fatalf("hub setup: %v, connections=%d", err, len(connections))
+	}
+	req := httptest.NewRequest("POST", "/claude/api/v1/events", strings.NewReader(`{"event_id":"evt_hub","event_type":"session.started","project_id":"prj_one","timestamp":"2026-01-01T00:00:00Z"}`))
+	req.Header.Set("Authorization", "Bearer "+secretA)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
+	}
+	req = httptest.NewRequest("POST", "/codex/api/v1/events", strings.NewReader(`{"event_id":"evt_hub","event_type":"session.started","project_id":"prj_two","timestamp":"2026-01-01T00:00:00Z"}`))
+	req.Header.Set("Authorization", "Bearer "+secretA)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong connection token got %d", w.Code)
+	}
+}

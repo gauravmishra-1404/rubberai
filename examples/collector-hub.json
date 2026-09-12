@@ -1,0 +1,26 @@
+{
+  "connections": [
+    {
+      "id": "claude-code",
+      "project_id": "prj_replace_me",
+      "endpoint": "http://localhost:8080",
+      "api_key": "rai_replace_me",
+      "local_token": "replace-with-a-unique-random-token-at-least-32-characters-long",
+      "outbox": "/home/you/.local/state/rubberai/claude-code",
+      "user_id": "your-stable-user-id",
+      "ide": "vscode",
+      "privacy": "METADATA_ONLY"
+    },
+    {
+      "id": "codex",
+      "project_id": "prj_replace_me",
+      "endpoint": "http://localhost:8080",
+      "api_key": "rai_replace_me",
+      "local_token": "replace-with-a-different-random-token-at-least-32-characters-long",
+      "outbox": "/home/you/.local/state/rubberai/codex",
+      "user_id": "your-stable-user-id",
+      "ide": "terminal",
+      "privacy": "METADATA_ONLY"
+    }
+  ]
+}

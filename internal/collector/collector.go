@@ -4,11 +4,6 @@ package collector
 
 import (
 	"bytes"
- "runtime"
- "strconv"
- "sync/atomic"
- "rubberai/internal/event"
- "rubberai/internal/integrations"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -16,23 +11,29 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"rubberai/internal/event"
+	"rubberai/internal/integrations"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 type Collector struct {
-	Dir, Endpoint, Key, LocalToken string
-	MaxBytes                       int64
-	Client                         *http.Client
+	Dir, Endpoint, Key, LocalToken  string
+	MaxBytes                        int64
+	Client                          *http.Client
 	ProjectID, UserID, IDE, Privacy string
- received, skipped, uploaded atomic.Int64
- mu                             sync.Mutex
-	wake                           chan struct{}
+	received, skipped, uploaded     atomic.Int64
+	mu                              sync.Mutex
+	wake                            chan struct{}
 }
 
 func New(dir, endpoint, key, localToken string) (*Collector, error) {
@@ -105,30 +106,53 @@ func (c *Collector) Handler() http.Handler {
 			http.Error(w, `{"error":{"code":"INVALID_JSON"}}`, 400)
 			return
 		}
-        if r.Header.Get("Content-Encoding")!="" || (otlp && !strings.HasPrefix(r.Header.Get("Content-Type"),"application/json")) {
-            http.Error(w, `{"error":{"code":"UNSUPPORTED_ENCODING","message":"Use uncompressed OTLP HTTP JSON"}}`,415);return
-        }
-        var events []event.Event
-        skipped := 0
-        if otlp {
-            events, skipped, err = integrations.Logs(body, integrations.Options{ProjectID:c.ProjectID,UserID:c.UserID,IDE:c.IDE})
-        } else { events,err = event.Decode(body) }
-        if err!=nil {http.Error(w, `{"error":{"code":"INVALID_EVENT","message":"Invalid event or OTLP mapping; check schema, project, timestamp and token fields"}}`,400);return}
-        for i:=range events {
-            if c.ProjectID!="" && events[i].ProjectID!=c.ProjectID {http.Error(w, `{"error":{"code":"PROJECT_MISMATCH"}}`,403);return}
-            events[i].ApplyPrivacy(c.Privacy, false)
-        }
-        c.skipped.Add(int64(skipped))
-        acknowledge := func() {
-            if otlp {
-                response:=map[string]any{}
-                if skipped>0 {response["partialSuccess"]=map[string]any{"rejectedLogRecords":strconv.Itoa(skipped),"errorMessage":"Unsupported log records were skipped"}}
-                _=json.NewEncoder(w).Encode(response)
-            } else {w.WriteHeader(202);_,_=w.Write([]byte(`{"queued":true}`))}
-        }
-        if len(events)==0 {acknowledge();return}
-        body,err=json.Marshal(map[string]any{"events":events})
-        if err!=nil || len(body)>1<<20 {http.Error(w, `{"error":{"code":"PAYLOAD_TOO_LARGE"}}`,413);return}
+		if r.Header.Get("Content-Encoding") != "" || (otlp && !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json")) {
+			http.Error(w, `{"error":{"code":"UNSUPPORTED_ENCODING","message":"Use uncompressed OTLP HTTP JSON"}}`, 415)
+			return
+		}
+		var events []event.Event
+		skipped := 0
+		if otlp {
+			events, skipped, err = integrations.Logs(body, integrations.Options{ProjectID: c.ProjectID, UserID: c.UserID, IDE: c.IDE})
+			if skipped > 0 {
+				log.Printf("rubberai collector skipped unsupported OTLP event kinds: %v", integrations.EventNames(body))
+			}
+		} else {
+			events, err = event.Decode(body)
+		}
+		if err != nil {
+			http.Error(w, `{"error":{"code":"INVALID_EVENT","message":"Invalid event or OTLP mapping; check schema, project, timestamp and token fields"}}`, 400)
+			return
+		}
+		for i := range events {
+			if c.ProjectID != "" && events[i].ProjectID != c.ProjectID {
+				http.Error(w, `{"error":{"code":"PROJECT_MISMATCH"}}`, 403)
+				return
+			}
+			events[i].ApplyPrivacy(c.Privacy, false)
+		}
+		c.skipped.Add(int64(skipped))
+		acknowledge := func() {
+			if otlp {
+				response := map[string]any{}
+				if skipped > 0 {
+					response["partialSuccess"] = map[string]any{"rejectedLogRecords": strconv.Itoa(skipped), "errorMessage": "Unsupported log records were skipped"}
+				}
+				_ = json.NewEncoder(w).Encode(response)
+			} else {
+				w.WriteHeader(202)
+				_, _ = w.Write([]byte(`{"queued":true}`))
+			}
+		}
+		if len(events) == 0 {
+			acknowledge()
+			return
+		}
+		body, err = json.Marshal(map[string]any{"events": events})
+		if err != nil || len(body) > 1<<20 {
+			http.Error(w, `{"error":{"code":"PAYLOAD_TOO_LARGE"}}`, 413)
+			return
+		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		size, pending, rejected, err := c.usage()
@@ -160,7 +184,9 @@ func (c *Collector) Handler() http.Handler {
 		}
 		if err == nil {
 			if d, e := os.Open(c.Dir); e == nil {
-				if runtime.GOOS != "windows" {err = d.Sync()}
+				if runtime.GOOS != "windows" {
+					err = d.Sync()
+				}
 				_ = d.Close()
 			} else {
 				err = e
@@ -217,7 +243,9 @@ func (c *Collector) FlushOne(ctx context.Context) (bool, error) {
 	defer c.mu.Unlock()
 	if res.StatusCode >= 200 && res.StatusCode < 300 {
 		err := os.Remove(name)
-		if err==nil {c.uploaded.Add(1)}
+		if err == nil {
+			c.uploaded.Add(1)
+		}
 		return true, err
 	}
 	switch res.StatusCode {
