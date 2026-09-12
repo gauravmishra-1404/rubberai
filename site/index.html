@@ -374,7 +374,7 @@ curl https://rubberai.example/api/v1/events \
   // "Allow adding visitor counts on your website" enabled. Until then nothing
   // loads and the footer line stays hidden rather than showing a broken number.
   (function () {
-    var code = '';                       // e.g. 'rubberai' for rubberai.goatcounter.com
+    var code = 'rubberai';               // its own GoatCounter site, separate from the portfolio's
     if (!code) return;
     var base = 'https://' + code + '.goatcounter.com';
     var s = document.createElement('script');
@@ -383,9 +383,11 @@ curl https://rubberai.example/api/v1/events \
     s.setAttribute('data-goatcounter', base + '/count');
     document.head.appendChild(s);
     fetch(base + '/counter/' + encodeURIComponent(location.pathname) + '.json')
-      .then(function (r) { return r.ok ? r.json() : null; })
+      // A path with no visits yet is answered 404 with a valid {"count":"0"},
+      // and a fresh page should say 0 rather than hide the line.
+      .then(function (r) { return r.json(); })
       .then(function (d) {
-        if (!d || !d.count) return;
+        if (!d || typeof d.count !== 'string') return;
         document.getElementById('visitor-count').textContent = d.count;
         document.getElementById('visitors').hidden = false;
       })
