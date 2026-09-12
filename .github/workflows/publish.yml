@@ -54,6 +54,6 @@ jobs:
           DEMO_DISPATCH_TOKEN: ${{ secrets.DEMO_DISPATCH_TOKEN }}
         run: |
           if [ -z "$DEMO_DISPATCH_TOKEN" ]; then echo "no DEMO_DISPATCH_TOKEN set; demo not notified"; exit 0; fi
-          curl -sS -X POST -H "Authorization: Bearer $DEMO_DISPATCH_TOKEN" -H "Accept: application/vnd.github+json" \
+          curl -sS --fail-with-body -X POST -H "Authorization: Bearer $DEMO_DISPATCH_TOKEN" -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/gauravmishra-1404/rubberai_demo/dispatches \
             -d '{"event_type":"image-published","client_payload":{"sha":"'"${GITHUB_SHA}"'"}}'
