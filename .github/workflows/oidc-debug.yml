@@ -1,0 +1,10 @@
+name: OIDC claims (temporary diagnostic)
+on: workflow_dispatch
+permissions: { id-token: write, contents: read }
+jobs:
+  claims:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq '{iss, aud, sub, repository, ref, event_name}'
