@@ -134,6 +134,107 @@ limit. These files may contain sensitive data: use a private directory and a
 single collector per outbox. Privacy filtering occurs at the server; integrations
 should omit sensitive content before it reaches disk when using metadata-only mode.
 
+## Central integration hub
+
+Run one local collector as an **integration hub** when a developer uses several
+IDEs or coding agents. Every connection has its own route, local token, project
+key and filesystem-permission-protected outbox. An adapter only receives its
+own local token; it never needs the project's ingestion key.
+
+1. Generate a project ingestion key in **Connect a project**.
+2. Copy [`examples/collector-hub.json`](examples/collector-hub.json) somewhere
+   private, replace every placeholder, and add one connection per tool.
+3. Start the hub:
+
+```sh
+export RUBBERAI_COLLECTOR_CONFIG="$HOME/.config/rubberai/collector.json"
+./bin/rubberai-collector
+```
+
+The hub listens on `127.0.0.1:4319`. A connection named `codex` accepts the
+standard event API at
+`http://127.0.0.1:4319/codex/api/v1/events` and OTLP HTTP/JSON logs at
+`http://127.0.0.1:4319/codex/v1/logs`. Both require that connection's local
+token as `Authorization: Bearer …`. The same layout works for Claude Code,
+VS Code extensions, Cursor, terminal wrappers, custom internal agents, and any
+tool that can emit HTTP JSON or OTLP logs.
+
+Use one connection per project/tool boundary. This prevents a token configured
+for one integration from sending events into a different project. The hub
+supports 1–16 connections, rejects duplicate IDs, outboxes and local tokens,
+and keeps every outbox private (`0700`). The single-connection environment
+variables above remain supported for a small setup.
+
+### What an adapter must send
+
+Adapters translate their source format to the documented event contract. They
+must emit `prompt.created` only for a human submission, with a stable
+`prompt_id` and the same value as `trace_id`. Tool, LLM, file and Git events
+from the resulting agentic loop reuse that trace or prompt ID. Background or
+unassigned work remains unassigned; the platform does not attach it to the
+latest prompt by guesswork. This is what keeps the primary dashboard to one row
+per user prompt while retaining technical detail in that prompt's timeline.
+
+The hub is a common transport and privacy boundary, not a magical listener for
+closed applications. A tool needs a hook, plugin, OpenTelemetry exporter, CLI
+wrapper, or its own HTTP integration to expose activity. The included Claude
+Code hook and Codex adapter are examples; generic HTTP remains the portable
+path for every other IDE and agent.
+
+### Codex desktop: prompt hook plus OTLP
+
+Codex's OpenTelemetry stream supplies model usage, timing, and agent activity.
+To guarantee that **only a human-submitted prompt** creates a prompt row, use
+Codex's `UserPromptSubmit` hook as the prompt source. The hook receives the
+human prompt, session ID, turn ID, and active model before the agent begins;
+agent continuations do not invoke it.
+
+Create a private hub connection called `codex-rubberai`, then configure Codex:
+
+```toml
+# ~/.codex/config.toml
+[otel]
+log_user_prompt = true
+
+[otel.exporter.otlp-http]
+endpoint = "http://127.0.0.1:4319/codex-rubberai/v1/logs"
+protocol = "json"
+
+[otel.exporter.otlp-http.headers]
+Authorization = "Bearer <codex-rubberai local token>"
+```
+
+Add a `UserPromptSubmit` command hook in `~/.codex/hooks.json`. Its program
+should read the hook JSON from standard input and POST a `prompt.created` event
+to `http://127.0.0.1:4319/codex-rubberai/api/v1/events` using that connection's
+local token. Reuse `session_id` and `turn_id` to create a stable `prompt_id` and
+use it as `trace_id`. The hook must exit quickly and never block the coding
+session if RubberAI is unavailable.
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [{
+      "hooks": [{
+        "type": "command",
+        "command": "/usr/bin/python3 ~/.codex/hooks/rubberai_user_prompt.py",
+        "timeout": 1
+      }]
+    }]
+  }
+}
+```
+
+Restart Codex after changing its configuration. A completed turn then has this
+relationship: `UserPromptSubmit` creates the user prompt; Codex OTLP records
+add usage and tool activity; any adapter file or Git events reuse the same
+session/turn identifiers. If Codex does not emit a measurement, RubberAI shows
+**Not reported** instead of estimating it. With `METADATA_ONLY`, the prompt row
+is visible but its text, diffs, and arbitrary metadata are discarded before the
+event is written to the collector outbox. Set both the project's collection
+policy and the hub connection's `privacy` value to `FULL` only when storing this
+content is intended.
+
 ## Cost estimates
 
 `PRICING_JSON` supplies explicit per-million token prices, keyed by provider/model:
