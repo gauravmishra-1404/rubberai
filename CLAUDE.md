@@ -143,10 +143,14 @@ Three details that matter if you touch it:
 Untracked files get line counts but no diff, since `git diff HEAD -- <path>`
 shows nothing for a file git does not yet know.
 
-## 6. Production on App Runner (deployed 2026-09-12)
+## 6. Repositories (split 2026-09-12)
 
-Live at `https://ggmwpqxp6f.ap-south-1.awsapprunner.com`; see
-[docs/deploy.md](docs/deploy.md) for every resource by name. Two things are easy
+This repository is the product only. It builds and **publishes** an image to
+`public.ecr.aws/g0m7w0k0/rubberai` on every push; it never deploys. Two sibling
+repositories own the rest: `rubberai_landing` (public) holds the landing page on
+GitHub Pages, and `rubberai_demo` (private) holds the App Runner deployment of
+the live demo and rolls it out when this repository publishes. Deployment
+details - every AWS resource by name - live in `rubberai_demo`'s README, not here. Two things are easy
 to get wrong from the code side:
 
 - **`APP_ORIGIN` must equal the served URL exactly.** The server rejects browser

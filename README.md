@@ -2,7 +2,7 @@
 
 Understand AI coding activity across projects, agents, IDEs and programming languages.
 
-**https://gauravmishra-1404.github.io/rubberai/** · [deployment notes](docs/deploy.md)
+**https://gauravmishra-1404.github.io/rubberai_landing/** · pre-built image: `public.ecr.aws/g0m7w0k0/rubberai`
 
 A Go modular monolith receives versioned HTTP events, stores them in PostgreSQL,
 and serves an embedded Svelte dashboard. An optional Go collector buffers events
@@ -300,4 +300,5 @@ been performed.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). The rubberai name and logo are not covered by the
+license — see [TRADEMARK.md](TRADEMARK.md).

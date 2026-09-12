@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Gaurav Mishra
+
+# Builds the server image and publishes it to a public registry, so anyone can
+# run rubberai with a docker pull and no build. This workflow never deploys:
+# where the image runs is a deployment's decision, made elsewhere. It only tells
+# the demo deployment that a new image exists.
+#
+# Authentication is OIDC against a role that can push this one image and nothing
+# else; no long-lived AWS key is stored in GitHub.
+name: Publish image
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: [docs/**, '**.md', LICENSE]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+env:
+  IMAGE: public.ecr.aws/g0m7w0k0/rubberai
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::201333676681:role/rubberai-github-deploy
+          aws-region: us-east-1   # ECR Public authenticates here; the image pulls globally
+
+      - name: Log in to ECR Public
+        run: aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
+
+      - name: Build and push
+        run: |
+          docker build --pull -t "$IMAGE:${GITHUB_SHA}" -t "$IMAGE:latest" .
+          docker push "$IMAGE:${GITHUB_SHA}"
+          docker push "$IMAGE:latest"
+
+      # A repository_dispatch to the demo deployment. Needs a token that can
+      # write to that repository; the default GITHUB_TOKEN is scoped to this one.
+      - name: Notify the demo deployment
+        env:
+          DEMO_DISPATCH_TOKEN: ${{ secrets.DEMO_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$DEMO_DISPATCH_TOKEN" ]; then echo "no DEMO_DISPATCH_TOKEN set; demo not notified"; exit 0; fi
+          curl -sS -X POST -H "Authorization: Bearer $DEMO_DISPATCH_TOKEN" -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/gauravmishra-1404/rubberai_demo/dispatches \
+            -d '{"event_type":"image-published","client_payload":{"sha":"'"${GITHUB_SHA}"'"}}'
