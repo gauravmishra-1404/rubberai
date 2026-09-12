@@ -295,3 +295,7 @@ groups are capped at 100 and event pages at 1,000 rows. A single backend instanc
 enforces in-memory per-minute request limits; distributed rate limiting is not
 implemented. No automatic IDE/agent instrumentation or production deployment has
 been performed.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
