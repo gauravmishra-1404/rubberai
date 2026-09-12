@@ -2,7 +2,7 @@
 
 Understand AI coding activity across projects, agents, IDEs and programming languages.
 
-**https://gauravmishra-1404.github.io/rubberai/**
+**https://gauravmishra-1404.github.io/rubberai/** · [deployment notes](docs/deploy.md)
 
 A Go modular monolith receives versioned HTTP events, stores them in PostgreSQL,
 and serves an embedded Svelte dashboard. An optional Go collector buffers events

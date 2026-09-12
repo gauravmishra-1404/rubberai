@@ -143,6 +143,19 @@ Three details that matter if you touch it:
 Untracked files get line counts but no diff, since `git diff HEAD -- <path>`
 shows nothing for a file git does not yet know.
 
+## 6. Production on App Runner (deployed 2026-09-12)
+
+Live at `https://ggmwpqxp6f.ap-south-1.awsapprunner.com`; see
+[docs/deploy.md](docs/deploy.md) for every resource by name. Two things are easy
+to get wrong from the code side:
+
+- **`APP_ORIGIN` must equal the served URL exactly.** The server rejects browser
+  writes whose `Origin` differs, so a wrong value does not degrade gracefully -
+  registration and login return 403 while `/healthz` stays green.
+- **The CI role's trust policy matches GitHub's ID-bearing subject claim.** New
+  repositories get `repo:owner@ID/name@ID:ref:…`; a policy written for the plain
+  form fails to assume the role with no hint about why.
+
 ## Conventions worth keeping
 
 - Validate **before** applying privacy. `Validate()` downgrades an unevidenced
