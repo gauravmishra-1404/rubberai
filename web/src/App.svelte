@@ -151,7 +151,7 @@ ${JSON.stringify({event_id:'evt_unique_id',event_type:'prompt.created',project_i
         <pre class="diff">{#each changeFile.diff.split('\n') as line}<span class={line.startsWith('+')&&!line.startsWith('+++')?'added':line.startsWith('-')&&!line.startsWith('---')?'removed':line.startsWith('@@')?'hunk':''}>{line}
 </span>{/each}</pre>
        {:else}
-        <p class="muted">No diff stored for this change. Untracked files have no prior version to compare against, and diffs are only kept when the project collects in full mode.</p>
+        <p class="muted">No diff stored for this change. Diffs are kept only when the integration sends them and the project collects in full mode.</p>
        {/if}
       {/if}
      </div>

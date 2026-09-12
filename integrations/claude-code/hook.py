@@ -39,6 +39,9 @@ HTTP_TIMEOUT = 5
 PROMPT_LIMIT = 20000
 SUMMARY_LIMIT = 2000
 DIFF_LIMIT = 40000
+# Largest file kept as a before/after snapshot. Bigger files are still reported
+# as changed, just without line counts or a diff.
+SNAPSHOT_LIMIT = 2 * 1024 * 1024
 SYNTHETIC_MODEL = "<synthetic>"
 
 # Claude Code reports where it is running as an "entrypoint"; rubberai wants an
@@ -258,39 +261,127 @@ def git(cwd: str, *args, timeout: int = 5):
     return done.stdout if done.returncode == 0 else None
 
 
+def blob_dir() -> str:
+    """Where file snapshots live: the adapter's own state, never the repository.
+
+    Writing into the repository's object store would leave dangling blobs behind
+    in someone else's git history; a content-addressed directory of our own is
+    just as good for diffing and can be pruned without touching their repo.
+    """
+    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    directory = os.path.join(base, "rubberai", "claude-code", "blobs")
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    return directory
+
+
+def store_blob(content: bytes) -> str:
+    """Keep a copy of content under its hash and return the hash."""
+    digest = hashlib.sha256(content).hexdigest()
+    path = os.path.join(blob_dir(), digest)
+    if len(content) <= SNAPSHOT_LIMIT:
+        try:
+            if os.path.exists(path):
+                os.utime(path, None)        # keep it out of the next prune
+            else:
+                with open(path, "wb") as handle:
+                    handle.write(content)
+                os.chmod(path, 0o600)
+        except OSError:
+            pass
+    return digest
+
+
+def read_blob(digest: str):
+    try:
+        with open(os.path.join(blob_dir(), digest), "rb") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
+def prune_blobs(max_age_days: int = 7) -> None:
+    """Drop snapshots nothing has touched for a week. Content-addressed, so a file
+    still in use is re-touched on every snapshot and survives."""
+    cutoff = datetime.now(timezone.utc).timestamp() - max_age_days * 86400
+    try:
+        with os.scandir(blob_dir()) as entries:
+            for entry in entries:
+                if entry.is_file() and entry.stat().st_mtime < cutoff:
+                    os.unlink(entry.path)
+    except OSError:
+        pass
+
+
 def worktree_state(cwd: str):
-    """Line counts per path for everything differing from HEAD, plus untracked files.
+    """Snapshot every file differing from HEAD, plus untracked files.
 
     Tool inputs only describe edits made through an edit tool. Most real work also
     changes files through the shell - sed, a heredoc, a formatter, a build - and
-    those are invisible to a hook that inspects tool arguments. Asking git instead
-    catches every one of them regardless of how the file was written, and gets
-    gitignored paths excluded for free.
+    those are invisible to a hook that inspects tool arguments. Asking git which
+    paths differ catches every one of them regardless of how the file was written,
+    and gets gitignored paths excluded for free.
 
-    Values are [added, removed, untracked] lists rather than tuples, because this
-    is persisted as JSON and would otherwise compare unequal after a round trip.
+    The content itself is snapshotted rather than asking git for line counts,
+    because git can only compare against the last commit. A file that has never
+    been committed has no "before" in git at all, and a committed file's diff
+    would cover everything since the commit rather than what this turn did.
+    Keeping our own copy of each changed file at the start of a turn gives the
+    real before/after for both cases, removals included.
+
+    Returns {path: {"hash": sha256 or None when deleted, "untracked": bool}}.
     """
-    numstat = git(cwd, "diff", "--numstat", "HEAD")
-    if numstat is None:
+    dirty = git(cwd, "diff", "--name-only", "HEAD")
+    if dirty is None:
         return None
+    untracked = git(cwd, "ls-files", "--others", "--exclude-standard") or ""
     state = {}
-    for line in numstat.splitlines():
-        parts = line.split("\t")
-        if len(parts) == 3:
-            added, removed, path = parts
-            # Binary files report "-"; record them as changed with no line counts.
-            state[path] = [int(added) if added.isdigit() else 0,
-                           int(removed) if removed.isdigit() else 0, False]
-    untracked = git(cwd, "ls-files", "--others", "--exclude-standard")
-    for path in (untracked or "").splitlines():
-        if not path:
-            continue
-        try:
-            with open(os.path.join(cwd, path), "rb") as handle:
-                state[path] = [handle.read().count(b"\n") + 1, 0, True]
-        except OSError:
-            state[path] = [0, 0, True]
+    for group, flag in ((dirty, False), (untracked, True)):
+        for path in group.splitlines():
+            if not path:
+                continue
+            try:
+                with open(os.path.join(cwd, path), "rb") as handle:
+                    state[path] = {"hash": store_blob(handle.read()), "untracked": flag}
+            except OSError:
+                state[path] = {"hash": None, "untracked": flag}
     return state
+
+
+def head_content(cwd: str, path: str):
+    """The committed version of path, or None when HEAD has no such file."""
+    try:
+        done = subprocess.run(
+            ("git", "-C", cwd, "show", "HEAD:" + path),
+            capture_output=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def content_diff(path: str, before: bytes, after: bytes, send_diffs: bool) -> dict:
+    """Line counts and, when enabled, a unified diff between two file versions."""
+    try:
+        before_lines = before.decode().splitlines()
+        after_lines = after.decode().splitlines()
+    except UnicodeDecodeError:
+        return {"lines_added": 0, "lines_removed": 0}   # binary: changed, uncounted
+    added = removed = 0
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(
+        None, before_lines, after_lines, autojunk=False
+    ).get_opcodes():
+        if op != "equal":
+            removed += i2 - i1
+            added += j2 - j1
+    change = {"lines_added": added, "lines_removed": removed}
+    if send_diffs:
+        diff = "\n".join(difflib.unified_diff(
+            before_lines, after_lines, lineterm="", n=2,
+            fromfile="a/" + path, tofile="b/" + path,
+        ))
+        if diff:
+            change["diff"] = diff[:DIFF_LIMIT]
+    return change
 
 
 # git status --porcelain reports two columns: the index state and the worktree
@@ -300,7 +391,9 @@ GIT_STATE = {"M": "modified", "A": "added", "D": "deleted", "R": "renamed", "C":
 
 def worktree_status(cwd: str) -> dict:
     """Version-control state per path: staged, unstaged, both, or untracked."""
-    porcelain = git(cwd, "status", "--porcelain")
+    # --untracked-files=all: by default git collapses a whole new directory into
+    # one "?? dir/" line, and the files inside it then have no status of their own.
+    porcelain = git(cwd, "status", "--porcelain", "--untracked-files=all")
     if porcelain is None:
         return {}
     status = {}
@@ -336,31 +429,70 @@ def worktree_changes(cwd: str, state: dict, send_diffs: bool):
     status = worktree_status(cwd)
     changes = []
     for path, entry in current.items():
-        added, removed, untracked = entry
-        was = previous.get(path) or [0, 0, untracked]
-        if [added, removed] == [was[0], was[1]]:
+        was = previous.get(path)
+        # State written by an older adapter holds line counts, not snapshots.
+        # Treat it as no snapshot: the file is then compared with its commit.
+        if not isinstance(was, dict):
+            was = None
+        if was is not None and was["hash"] == entry["hash"]:
+            continue
+        # What the file looked like when this turn started: our snapshot if one
+        # was taken, otherwise the committed version, otherwise nothing - a file
+        # that did not exist is all additions.
+        before = read_blob(was["hash"]) if was and was["hash"] else None
+        if before is None and was is None and not entry["untracked"]:
+            before = head_content(cwd, path)
+        if before is None:
+            before = b""
+        after = read_blob(entry["hash"]) if entry["hash"] else None
+        if entry["hash"] is None:
+            # Gone from disk. Report it once: a tracked file that was clean or
+            # snapshotted a moment ago was deleted this step; one already
+            # recorded as missing, or an unreadable untracked path, is not news.
+            if (was is not None and was["hash"] is None) or (was is None and entry["untracked"]):
+                continue
+            changes.append({
+                "path": path, "operation": "deleted", "change_source": "AI",
+                "evidence": AGENT_NAME + ":worktree",
+                "status": status.get(path, "unstaged deleted"),
+            })
             continue
         change = {
             "path": path,
-            # Untracked means the file did not exist in the repository before, so
-            # it is a creation. A tracked file with new lines is a modification,
-            # however it was written.
-            "operation": "created" if untracked else "modified",
+            # Untracked means the file is not in the repository, so its first
+            # appearance is a creation. Further edits to it, or any edit to a
+            # tracked file, are modifications however they were written.
+            "operation": "created" if entry["untracked"] and was is None else "modified",
             "change_source": "AI",
             "evidence": AGENT_NAME + ":worktree",
             "status": status.get(path, "unstaged modified"),
-            # The delta since the previous check, so a row reads as what this step
-            # did rather than everything accumulated since the last commit.
-            "lines_added": max(added - was[0], 0),
-            "lines_removed": max(removed - was[1], 0),
         }
-        if send_diffs:
-            diff = git(cwd, "diff", "--unified=2", "HEAD", "--", path)
-            if diff:
-                change["diff"] = diff[:DIFF_LIMIT]
+        if after is None:
+            change.update({"lines_added": 0, "lines_removed": 0})  # over the snapshot limit
+        else:
+            change.update(content_diff(path, before, after, send_diffs))
+        change["before_hash"] = hashlib.sha256(before).hexdigest()
+        change["after_hash"] = entry["hash"]
         changes.append(change)
-    for path in previous:
-        if path not in current:
+    for path, was in previous.items():
+        if path in current:
+            continue
+        if os.path.exists(os.path.join(cwd, path)):
+            # Still on disk but no longer differing from HEAD: the turn put a
+            # tracked file back the way it was committed. That is an edit too.
+            before = read_blob(was["hash"]) if isinstance(was, dict) and was["hash"] else None
+            after = head_content(cwd, path)
+            if before is None or after is None or before == after:
+                continue
+            change = {
+                "path": path, "operation": "modified", "change_source": "AI",
+                "evidence": AGENT_NAME + ":worktree", "status": "clean",
+                "before_hash": hashlib.sha256(before).hexdigest(),
+                "after_hash": hashlib.sha256(after).hexdigest(),
+            }
+            change.update(content_diff(path, before, after, send_diffs))
+            changes.append(change)
+        else:
             changes.append({
                 "path": path, "operation": "deleted", "change_source": "AI",
                 "evidence": AGENT_NAME + ":worktree",
@@ -569,6 +701,7 @@ def handle(config: dict, project: dict, payload: dict, event_name: str) -> None:
             path = payload.get("transcript_path")
             state = {"offset": os.path.getsize(path) if path and os.path.exists(path) else 0,
                      "boundaries": []}
+        prune_blobs()
         baseline = worktree_state(payload.get("cwd") or os.getcwd())
         if baseline is not None:
             state["worktree"] = baseline

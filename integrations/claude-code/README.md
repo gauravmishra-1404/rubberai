@@ -70,13 +70,23 @@ and the server still discards it unless the project stores diffs and is not
 collecting metadata only. Both gates must be open for a diff to be kept.
 
 Inside a git repository, changes come from git rather than from tool arguments.
-Asking `git diff --numstat HEAD` after each tool call catches every edit however
-it was made — a shell heredoc, `sed`, a formatter, a build — where inspecting the
-arguments of `Write` and `Edit` sees only those two tools and misses everything
-done through the shell. Gitignored paths are excluded for free. Each turn's
-baseline is taken when the prompt is submitted, so a tree that was already dirty
-is not credited to that prompt, and untracked files are reported as created while
-tracked ones are modified.
+Asking git which paths differ from `HEAD` (plus untracked files) after each tool
+call catches every edit however it was made — a shell heredoc, `sed`, a
+formatter, a build — where inspecting the arguments of `Write` and `Edit` sees
+only those two tools and misses everything done through the shell. Gitignored
+paths are excluded for free.
+
+The before/after content is not git's, though. Git can only compare a file with
+its last commit: a file that has never been committed has no "before" at all,
+and a committed file's diff would cover everything since the commit rather than
+what one turn did. So when a prompt is submitted the adapter snapshots every
+changed and untracked file into `~/.local/state/rubberai/claude-code/blobs/`
+(content-addressed, files up to 2 MiB, pruned after a week unused), and after
+each tool call diffs the snapshot against the file. Each prompt therefore reports
+exactly its own additions and removals, whether or not anything was ever
+committed, and a tree that was already dirty is not credited to the prompt. An
+untracked file's first appearance is reported as created; later edits to it, and
+edits to tracked files, are modifications.
 
 Outside a git repository the adapter falls back to tool arguments, where changes
 are derived from the tool call itself, which carries the exact strings replaced,
