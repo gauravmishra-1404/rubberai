@@ -382,7 +382,11 @@ curl https://rubberai.example/api/v1/events \
     s.src = 'https://gc.zgo.at/count.js';
     s.setAttribute('data-goatcounter', base + '/count');
     document.head.appendChild(s);
-    fetch(base + '/counter/' + encodeURIComponent(location.pathname) + '.json')
+    // TOTAL rather than this page's path: GoatCounter normalises the path it
+    // stores (/rubberai/ becomes /rubberai), so a lookup keyed on
+    // location.pathname can miss its own visits. This site counts one page,
+    // so the site total is the page total, with no normalisation to guess.
+    fetch(base + '/counter/TOTAL.json')
       // A path with no visits yet is answered 404 with a valid {"count":"0"},
       // and a fresh page should say 0 rather than hide the line.
       .then(function (r) { return r.json(); })
