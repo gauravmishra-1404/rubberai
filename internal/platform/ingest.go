@@ -146,8 +146,71 @@ func filters(r *http.Request) (string, []any, error) {
 	return where, args, nil
 }
 
+// Stand-in identity shown to demo visitors. The hover card - who sent a prompt,
+// from which machine and address - is part of what the demo exists to show,
+// but the developer's real email, hostname and LAN address are not for the
+// public. So a demo session always sees these fixed values in place of
+// whatever is stored, and the stored values never leave the database for it.
+// The owner's own sessions are untouched.
+const (
+	demoHost = "dev-laptop"
+	demoIP   = "10.0.4.17"
+)
+
+func demoEmail(user any) string {
+	if s, ok := user.(string); ok && s != "" && s != "unknown" {
+		return s + "@example.com"
+	}
+	return "developer@example.com"
+}
+
+// maskEvent replaces identity in one stored event for a demo viewer. Identity
+// travels in metadata; every prompt gets the stand-in so the card is always
+// populated, and any other event carrying one of the keys has it replaced.
+func maskEvent(raw json.RawMessage) json.RawMessage {
+	var e map[string]any
+	if json.Unmarshal(raw, &e) != nil {
+		return raw
+	}
+	md, _ := e["metadata"].(map[string]any)
+	prompt := e["event_type"] == "prompt.created"
+	if md == nil {
+		if !prompt {
+			return raw
+		}
+		md = map[string]any{}
+	}
+	for key, value := range map[string]any{"email": demoEmail(e["user_id"]), "host": demoHost, "ip": demoIP} {
+		if _, present := md[key]; present || prompt {
+			md[key] = value
+		}
+	}
+	e["metadata"] = md
+	out, err := json.Marshal(e)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+// maskStats does the same for an aggregate row, which carries the prompt's
+// identity as prompt_email/prompt_host/prompt_ip.
+func maskStats(raw json.RawMessage) json.RawMessage {
+	var s map[string]any
+	if json.Unmarshal(raw, &s) != nil || s["prompt_user"] == nil {
+		return raw
+	}
+	s["prompt_email"], s["prompt_host"], s["prompt_ip"] = demoEmail(s["prompt_user"]), demoHost, demoIP
+	out, err := json.Marshal(s)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
 func (a *App) events(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.project(w, r); !ok {
+	p, ok := a.project(w, r)
+	if !ok {
 		return
 	}
 	where, args, err := filters(r)
@@ -184,6 +247,9 @@ func (a *App) events(w http.ResponseWriter, r *http.Request) {
 		if rows.Scan(&raw) != nil {
 			fail(w, 500, "STORAGE_ERROR", "Could not decode events")
 			return
+		}
+		if p.Demo {
+			raw = maskEvent(raw)
 		}
 		out = append(out, raw)
 	}
@@ -243,7 +309,8 @@ const aggregateSQL = `jsonb_build_object(
  )`
 
 func (a *App) analytics(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.project(w, r); !ok {
+	p, ok := a.project(w, r)
+	if !ok {
 		return
 	}
 	where, args, err := filters(r)
@@ -291,6 +358,9 @@ func (a *App) analytics(w http.ResponseWriter, r *http.Request) {
 			rows.Close()
 			fail(w, 500, "STORAGE_ERROR", "Could not read groups")
 			return
+		}
+		if p.Demo {
+			stats = maskStats(stats)
 		}
 		breakdown = append(breakdown, map[string]any{"name": name, "stats": stats})
 	}
@@ -344,6 +414,9 @@ func (a *App) analytics(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, item := range breakdown {
 		item["costs"] = groupedCosts[item["name"].(string)]
+	}
+	if p.Demo {
+		totals = maskStats(totals)
 	}
 	writeJSON(w, 200, map[string]any{"totals": totals, "costs": costs, "group_by": group, "breakdown": breakdown, "group_limit": 100})
 }

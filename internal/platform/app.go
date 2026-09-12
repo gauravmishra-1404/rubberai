@@ -110,6 +110,9 @@ type Project struct {
 	RepositoryURL string `json:"repository_url"`
 	Privacy       string `json:"privacy"`
 	TrackDiffs    bool   `json:"track_diffs"`
+	// Demo is set when the viewer holds a demo login rather than a real account.
+	// It is a property of the request, not the project, and is never serialized.
+	Demo bool `json:"-"`
 }
 
 func New(ctx context.Context, dsn, origin string) (*App, error) {
@@ -313,6 +316,7 @@ func (a *App) project(w http.ResponseWriter, r *http.Request) (Project, bool) {
 		fail(w, 404, "PROJECT_NOT_FOUND", "Project not found")
 		return p, false
 	}
+	p.Demo = u.Demo != ""
 	return p, true
 }
 func (a *App) authLimit(w http.ResponseWriter, r *http.Request) bool {

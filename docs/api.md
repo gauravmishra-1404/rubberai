@@ -38,6 +38,15 @@ project in the organization answers 404. `/me` reports `demo` with the project
 id so a client can hide what the session cannot do. With no `DEMO_PROJECT_ID`
 configured the route answers 404.
 
+A demo session never sees who the developers are. In its responses the
+identity an adapter recorded in `metadata` (`email`, `host`, `ip`) and the
+aggregate `prompt_email`/`prompt_host`/`prompt_ip` fields are replaced with
+stand-ins (`<user_id>@example.com`, `dev-laptop`, `10.0.4.17`) - always
+present on prompts, so the feature is visible, and substituted on any other
+event that carries one of the keys. The replacement happens on the way out;
+the stored values are unchanged and the owner's own sessions read them as
+recorded.
+
 The session cookie is HttpOnly, SameSite=Strict, and Secure when APP_ORIGIN uses
 HTTPS. Browser writes must originate from APP_ORIGIN. Ingestion API keys cannot
 use account, project, analytics or key-management endpoints.

@@ -12,6 +12,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -235,6 +236,38 @@ func TestPostgresEndToEnd(t *testing.T) {
 	}
 	request(demo, "GET", path+"/analytics", "", nil, 200)
 	request(demo, "GET", prefix+"/projects/"+hidden["id"].(string)+"/analytics", "", nil, 404)
+	// Identity: the owner reads what the adapter recorded; the demo reads the
+	// same rows with stand-ins, so the hover card works without exposing anyone.
+	who := prompt
+	who.ID, who.PromptID, who.TraceID, who.UserID = token("evt_"), "prompt_who", "prompt_who", "dev"
+	who.Metadata = map[string]json.RawMessage{"email": json.RawMessage(`"real@corp.example"`), "host": json.RawMessage(`"real-host"`), "ip": json.RawMessage(`"192.168.1.9"`)}
+	request(http.DefaultClient, "POST", prefix+"/events", key, who, 200)
+	identity := func(c *http.Client) (map[string]any, map[string]any) {
+		var row map[string]any
+		for _, g := range request(c, "GET", path+"/analytics?group_by=prompt", "", nil, 200)["breakdown"].([]any) {
+			if g.(map[string]any)["name"] == "prompt_who" {
+				row = g.(map[string]any)["stats"].(map[string]any)
+			}
+		}
+		ev := request(c, "GET", path+"/events?prompt_id=prompt_who", "", nil, 200)["events"].([]any)[0].(map[string]any)
+		return row, ev["metadata"].(map[string]any)
+	}
+	row, md := identity(owner)
+	if row["prompt_email"] != "real@corp.example" || row["prompt_ip"] != "192.168.1.9" || md["host"] != "real-host" {
+		t.Fatal("owner lost identity", row, md)
+	}
+	row, md = identity(demo)
+	if row["prompt_email"] != "dev@example.com" || row["prompt_host"] != "dev-laptop" || row["prompt_ip"] != "10.0.4.17" {
+		t.Fatal("demo saw real identity", row)
+	}
+	if md["email"] != "dev@example.com" || md["host"] != "dev-laptop" || md["ip"] != "10.0.4.17" {
+		t.Fatal("demo event carried real identity", md)
+	}
+	for _, blob := range []map[string]any{row, md} {
+		if s, _ := json.Marshal(blob); strings.Contains(string(s), "real") || strings.Contains(string(s), "192.168") {
+			t.Fatal("real identity reached the demo", string(s))
+		}
+	}
 	request(demo, "POST", prefix+"/projects", "", map[string]any{"name": "x"}, 403)
 	request(demo, "PATCH", path, "", map[string]any{"name": "renamed", "privacy": "FULL"}, 403)
 	request(demo, "POST", path+"/keys", "", map[string]string{"name": "x"}, 403)
