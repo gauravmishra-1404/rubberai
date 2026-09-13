@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Gaurav Mishra
+#
+# Runs on every pull request and every push. This is the only workflow a
+# contributor's change goes through; it needs no secrets and no cloud access,
+# so it is safe to run on pull requests from forks. Publishing the image is a
+# separate workflow that only runs on main.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (format, vet, tests with Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: rubberai
+          POSTGRES_PASSWORD: rubberai
+          POSTGRES_DB: rubberai_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U rubberai -d rubberai_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"; echo "$unformatted"; exit 1
+          fi
+      - run: go vet ./...
+      - name: go test
+        env:
+          TEST_DATABASE_URL: postgres://rubberai:rubberai@localhost:5432/rubberai_test?sslmode=disable
+        run: go test -race ./...
+
+  web:
+    name: Dashboard (svelte-check, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+
+  python:
+    name: Python (SDK and Claude Code adapter)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -m unittest -v
+        working-directory: sdk/python
+      - run: python3 -m unittest -v
+        working-directory: integrations/claude-code

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security problem
+    url: https://github.com/gauravmishra-1404/rubberai/security/advisories/new
+    about: Report privately. Please do not open a public issue for security bugs.
+  - name: Setup question
+    url: https://github.com/gauravmishra-1404/rubberai/blob/main/README.md
+    about: The README covers running, connecting tools and every configuration variable.

@@ -251,15 +251,33 @@ func costKey(c *Cost) string { return fmt.Sprintf("%s:%s", c.Currency, c.Type) }
 
 // ValidIdentifier is shared by configuration and event validation.
 func ValidIdentifier(s string) bool { return identifier.MatchString(s) }
-func ValidPrice(amount, currency string) bool { return decimalAmount.MatchString(amount) && currencyCode.MatchString(currency) }
+func ValidPrice(amount, currency string) bool {
+	return decimalAmount.MatchString(amount) && currencyCode.MatchString(currency)
+}
 
 // Decode accepts the public single-event or batch envelope.
 func Decode(raw []byte) ([]Event, error) {
- var envelope struct { Events []Event `json:"events"` }
- if err := json.Unmarshal(raw,&envelope); err != nil { return nil,err }
- events := envelope.Events
- if events == nil { var e Event; if err:=json.Unmarshal(raw,&e);err!=nil{return nil,err}; events=[]Event{e} }
- if len(events)<1 || len(events)>100 {return nil,errors.New("send 1–100 events")}
- for i:=range events { if err:=events[i].Validate();err!=nil{return nil,err} }
- return events,nil
+	var envelope struct {
+		Events []Event `json:"events"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, err
+	}
+	events := envelope.Events
+	if events == nil {
+		var e Event
+		if err := json.Unmarshal(raw, &e); err != nil {
+			return nil, err
+		}
+		events = []Event{e}
+	}
+	if len(events) < 1 || len(events) > 100 {
+		return nil, errors.New("send 1–100 events")
+	}
+	for i := range events {
+		if err := events[i].Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return events, nil
 }

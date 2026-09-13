@@ -5,7 +5,6 @@ package platform
 
 import (
 	"context"
- schema "rubberai/internal/event"
 	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
@@ -20,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	schema "rubberai/internal/event"
 	"strconv"
 	"strings"
 	"sync"
@@ -157,6 +157,7 @@ func New(ctx context.Context, dsn, origin string) (*App, error) {
 	}
 	return a, nil
 }
+
 // nullTime keeps an unchecked timestamp out of the column entirely, so a stored
 // value always means the check actually ran.
 func nullTime(t time.Time) any {
@@ -285,6 +286,7 @@ func (a *App) user(w http.ResponseWriter, r *http.Request) (User, bool) {
 	}
 	return u, true
 }
+
 // writer resolves a session that is allowed to change things. A demo session
 // can read one project and nothing more; refusing it here, in one place, is what
 // makes "read-only" a property of the server rather than of whichever buttons
@@ -422,6 +424,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	}
 	a.session(w, r, u)
 }
+
 // demo issues a read-only session confined to the configured demo project and
 // sends the visitor to the dashboard. It is a GET so a plain link on a marketing
 // page can open it, and it holds no credential: the session is minted here, tied

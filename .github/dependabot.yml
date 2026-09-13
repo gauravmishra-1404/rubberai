@@ -1,0 +1,17 @@
+# Keeps dependencies current with one PR per update, grouped so minor and
+# patch bumps do not arrive one at a time. CI runs on each PR like any other.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: {interval: weekly}
+    groups:
+      go: {patterns: ["*"], update-types: [minor, patch]}
+  - package-ecosystem: npm
+    directory: /web
+    schedule: {interval: weekly}
+    groups:
+      npm: {patterns: ["*"], update-types: [minor, patch]}
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
