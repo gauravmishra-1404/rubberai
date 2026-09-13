@@ -33,7 +33,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::201333676681:role/rubberai-github-deploy
           aws-region: us-east-1   # ECR Public authenticates here; the image pulls globally
